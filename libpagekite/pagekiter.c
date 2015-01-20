@@ -22,11 +22,11 @@ Note: For alternate license terms, see the file COPYING.md.
 
 ******************************************************************************/
 
-#include "common.h"
+#include "pkcommon.h"
 #include "pagekite.h"
 #include <signal.h>
 
-#include "utils.h"
+#include "pkutils.h"
 #include "pkstate.h"
 #include "pkerror.h"
 #include "pkconn.h"

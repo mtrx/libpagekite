@@ -30,8 +30,8 @@ How it works:
 #define PAGEKITE_CONSTANTS_ONLY
 #include "pagekite.h"
 
-#include "common.h"
-#include "utils.h"
+#include "pkcommon.h"
+#include "pkutils.h"
 #include "pkstate.h"
 #include "pkerror.h"
 #include "pkconn.h"
