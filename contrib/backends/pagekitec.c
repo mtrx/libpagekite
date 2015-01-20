@@ -23,7 +23,7 @@ Note: For alternate license terms, see the file COPYING.md.
 ******************************************************************************/
 
 #include <pagekite.h>
-#include "common.h"
+#include <pkcommon.h>
 
 
 #define EXIT_ERR_MANAGER_INIT 1
