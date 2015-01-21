@@ -899,6 +899,19 @@ static void pkm_tick_cb(EV_P_ ev_async* w, int revents)
     }
   }
 
+  /* Exit if not connected and no frontends available */
+  static int no_frontend_hack = 0;
+  if (pkm->status == PK_STATUS_FLYING) {
+    no_frontend_hack = 0;
+  } else {
+    no_frontend_hack ++;
+    pk_log(PK_LOG_MANAGER_INFO, "Kite status: %d", pkm->status);
+  }
+  if (no_frontend_hack > 50) {
+    pk_log(PK_LOG_MANAGER_INFO, "Bad kite status, not flying. Check your network.");
+    abort();
+  }
+
   /* Finally, trigger the tunnel check on the blocking thread. */
   if (pkm->last_world_update + pkm->check_world_interval < time(0)) {
     pkb_add_job(&(pkm->blocking_jobs), PK_CHECK_WORLD, 0, pkm);
