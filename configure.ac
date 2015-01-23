@@ -1,7 +1,7 @@
 #                                               -*- Autoconf -*-
 # Process this file with autoconf to produce a configure script.
 
-AC_PREREQ([2.69])
+AC_PREREQ([2.68])
 
 # libpagekite is Copyright 2011-2014, The Beanstalks Project ehf.
 
@@ -38,6 +38,7 @@ AC_PROG_CC
 m4_ifdef([AM_PROG_AR], [AM_PROG_AR])
 AC_PROG_LIBTOOL
 #AC_PROG_INSTALL
+AM_PROG_CC_C_O
 
 LT_INIT
 
