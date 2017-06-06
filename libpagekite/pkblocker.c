@@ -592,7 +592,7 @@ int pkb_update_dns(struct pk_manager* pkm)
       rlen = http_get(url, get_result, 10240);
 
       if (rlen < 1) {
-        pk_log(PK_LOG_MANAGER_ERROR, "DDNS: No response from %s", url);
+        pk_log(PK_LOG_MANAGER_ERROR, "DDNS: No response from %s", pkm->dynamic_dns_url);
         bogus++;
       }
       else {
@@ -609,7 +609,7 @@ int pkb_update_dns(struct pk_manager* pkm)
         }
         else {
           result[7] = '\0';
-          pk_log(PK_LOG_MANAGER_ERROR, "DDNS: Update failed for %s (%s -> %s)",
+          pk_log(PK_LOG_MANAGER_ERROR, "DDNS: Update failed for %.8s (%s -> %s)",
                                        kite->public_domain, url, result);
           bogus++;
         }

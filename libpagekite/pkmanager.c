@@ -206,7 +206,7 @@ static void pkm_chunk_cb(struct pk_tunnel* fe, struct pk_chunk *chunk)
 
       bytes = pk_format_eof(reply, chunk->sid, PK_EOF);
       pkc_write(&(fe->conn), reply, bytes);
-      pk_log(PK_LOG_TUNNEL_CONNS, "No stream found: %s, %s://%s", chunk->sid,
+      pk_log(PK_LOG_TUNNEL_CONNS, "No stream found: %s, %s://%.8s", chunk->sid,
                                   chunk->request_proto, chunk->request_host);
     }
   }
@@ -302,7 +302,7 @@ struct pk_backend_conn* pkm_connect_be(struct pk_tunnel* fe,
                                     chunk->request_proto,
                                     chunk->request_host,
                                     chunk->request_port))) {
-    pk_log(PK_LOG_TUNNEL_CONNS, "pkm_connect_be: No such kite %s://%s:%d",
+    pk_log(PK_LOG_TUNNEL_CONNS, "pkm_connect_be: No such kite %s://%.8s:%d",
                                 chunk->request_proto, chunk->request_host,
                                 chunk->request_port);
     return NULL;
@@ -311,7 +311,7 @@ struct pk_backend_conn* pkm_connect_be(struct pk_tunnel* fe,
   /* Allocate a connection for this request or die... */
   if (NULL == (pkb = pkm_alloc_be_conn(fe->manager, fe, chunk->sid))) {
     pk_log(PK_LOG_TUNNEL_CONNS|PK_LOG_ERROR,
-           "pkm_connect_be: BE alloc failed for %s://%s:%d",
+           "pkm_connect_be: BE alloc failed for %s://%.8s:%d",
            chunk->request_proto, chunk->request_host, chunk->request_port);
     return NULL;
   }

@@ -1002,7 +1002,7 @@ int pk_connect_ai(struct pk_conn* pkc, struct addrinfo* ai, int reconnecting,
                 (0 == strcmp(requests[j].kite->public_domain, pkr->kite->public_domain)) &&
                 (0 == strcmp(requests[j].kite->protocol, pkr->kite->protocol)))
             {
-              pk_log(PK_LOG_TUNNEL_DATA, " - Matched: %s:%s",
+              pk_log(PK_LOG_TUNNEL_DATA, " - Matched: %s:%.8s",
                                          requests[j].kite->protocol,
                                          requests[j].kite->public_domain);
               strncpyz(requests[j].fsalt, pkr->fsalt, PK_SALT_LENGTH);
