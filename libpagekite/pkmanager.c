@@ -1069,7 +1069,7 @@ static void pkm_tick_cb(EV_P_ ev_async* w, int revents)
   {
     pkm->timer.repeat = pkm->next_tick;
     ev_timer_again(pkm->loop, &(pkm->timer));
-    pk_log(PK_LOG_MANAGER_INFO,
+    pk_log(PK_LOG_MANAGER_DEBUG,
            "Tick!  [repeating=%s, next=%d, status=%d, tunnels=%d, v=%s]",
            pkm->enable_timer ? "yes" : "no", pkm->next_tick,
            pkm->status, pk_state.live_tunnels, PK_VERSION);
@@ -1096,7 +1096,7 @@ static void pkm_tick_cb(EV_P_ ev_async* w, int revents)
   }
   else {
     ev_timer_stop(pkm->loop, &(pkm->timer));
-    pk_log(PK_LOG_MANAGER_INFO,
+    pk_log(PK_LOG_MANAGER_DEBUG,
            "Tick!  [repeating=%s, stopped, status=%d, v=%s]",
            pkm->enable_timer ? "yes" : "no", pkm->status, PK_VERSION);
     /* Reset interval. */
