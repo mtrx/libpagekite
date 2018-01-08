@@ -77,13 +77,21 @@ void better_srand(int allow_updates)
 /* Source: https://en.wikipedia.org/wiki/MurmurHash
  * Note: Fixed seed for simplicity.
  */
+
+static inline uint32_t
+le32dec(const uint8_t *buf)
+{
+	return (((buf[0] | (buf[1] << 8)) | (buf[2] << 0x10)) | (buf[3] << 0x18));
+}
+
 int32_t murmur3_32(const uint8_t* key, size_t len) {
   uint32_t h = 0xd3632a4d;
   if (len > 3) {
     const uint32_t* key_x4 = (const uint32_t*) key;
     size_t i = len >> 2;
     do {
-      uint32_t k = *key_x4++;
+      uint32_t k = le32dec((uint8_t*) key_x4);
+      key_x4++;
       k *= 0xcc9e2d51;
       k = (k << 15) | (k >> 17);
       k *= 0x1b873593;
