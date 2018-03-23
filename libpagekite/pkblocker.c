@@ -692,6 +692,32 @@ void pkb_update_state(struct pk_manager* pkm, int dns_is_down, int problems)
       PKS_STATE(pkm->status = PK_STATUS_PROBLEMS);
     }
   }
+
+  static pk_status_t oldStatus = 0;
+  struct statusMessage {
+    pk_status_t st;
+    int logTarget;
+    char * logMessage;
+  };
+  struct statusMessage stMsgList[] = {
+    {PK_ENUM_STATUS_STARTUP, PK_LOG_MANAGER_INFO, "startup"},
+	{PK_ENUM_STATUS_CONNECTING, PK_LOG_MANAGER_INFO, "connecting"},
+	{PK_ENUM_STATUS_UPDATING_DNS, PK_LOG_MANAGER_INFO, "updating-dns"},
+	{PK_ENUM_STATUS_FLYING, PK_LOG_MANAGER_INFO, "flying"},
+	{PK_ENUM_STATUS_PROBLEMS, PK_LOG_MANAGER_ERROR, "problems"},
+	{PK_ENUM_STATUS_REJECTED, PK_LOG_MANAGER_ERROR, "rejected"},
+	{PK_ENUM_STATUS_NO_NETWORK, PK_LOG_MANAGER_ERROR, "network-down"},
+	{0, PK_LOG_MANAGER_ERROR, "unknown"},
+  };
+  if (oldStatus != pkm->status) {
+    int i;
+    for (i = 0; i < sizeof(stMsgList) / sizeof(struct statusMessage) - 1; i ++) {
+      if (stMsgList[i].st == pkm->status)
+        break;
+	}
+    pk_log(stMsgList[i].logTarget, "Relay Status: %s [%d]", stMsgList[i].logMessage, pkm->status);
+    oldStatus = pkm->status;
+  }
 }
 
 void pkb_check_tunnels(struct pk_manager* pkm)
