@@ -1,7 +1,7 @@
 /******************************************************************************
 pkmanager.c - A manager for multiple pagekite connections.
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -166,9 +166,8 @@ static void pkm_quit(struct pk_manager* pkm)
 static void pkm_chunk_cb(struct pk_tunnel* fe, struct pk_chunk *chunk)
 {
   struct pk_backend_conn* pkb; /* FIXME: What if we are a front-end? */
-  char reply[PK_REJECT_MAXSIZE], pre[PK_REJECT_MAXSIZE], rej[PK_REJECT_MAXSIZE];
-  char *post;
-  int bytes;
+  char reply[PK_REJECT_MAXSIZE], rej[PK_REJECT_MAXSIZE];
+  size_t bytes;
 
   PK_TRACE_FUNCTION;
   pk_log_chunk(fe, chunk);
@@ -196,20 +195,12 @@ static void pkm_chunk_cb(struct pk_tunnel* fe, struct pk_chunk *chunk)
         pkc_write(&(fe->conn), reply, bytes);
       }
       else {
-        if (fe->manager->fancy_pagekite_net_rejection) {
-          sprintf(pre, PK_REJECT_PRE_PAGEKITE, "BE", pk_state.app_id_short,
-                       chunk->request_proto, chunk->request_host);
-          post = PK_REJECT_POST_PAGEKITE;
-        }
-        else {
-          pre[0] = '\0';
-          post = pre;
-        }
-        sprintf(rej, PK_REJECT_FMT,
-                     pre, "be", pk_state.app_id_short,
-                     chunk->request_proto, chunk->request_host, post);
-
-        bytes = pk_format_reply(reply, chunk->sid, strlen(rej), rej);
+        bytes = pk_format_http_rejection(rej,
+          PK_REJECT_BACKEND,
+          fe->manager->fancy_pagekite_net_rejection_url,
+          chunk->request_proto,
+          chunk->request_host);
+        bytes = pk_format_reply(reply, chunk->sid, bytes, rej);
         pkc_write(&(fe->conn), reply, bytes);
       }
 
@@ -236,7 +227,7 @@ static void pkm_chunk_cb(struct pk_tunnel* fe, struct pk_chunk *chunk)
       /* Record this ping, even if not initiated by us. This allows us to
        * use pings as a metric of whether a tunnel is in use, to prevent
        * premature disconnections. */
-      fe->last_ping = time(0);
+      fe->last_ping = pk_time();
     }
   }
   else if (NULL != pkb) {
@@ -817,7 +808,6 @@ static void pkm_listener_cb(EV_P_ ev_io* w, int revents)
 }
 
 int pkm_reconnect_all(struct pk_manager* pkm, int ignore_errors) {
-  struct pk_tunnel *fe;
   struct pk_kite_request *kite_r;
   unsigned int status;
   int i, j, reconnect, tried, connected;
@@ -832,8 +822,7 @@ int pkm_reconnect_all(struct pk_manager* pkm, int ignore_errors) {
    *   - if missing a desired front-end, tear down tunnels and reconnect.
    */
   pkm_block(pkm);
-  for (i = 0; i < pkm->tunnel_max; i++) {
-    fe = (pkm->tunnels + i);
+  PK_TUNNEL_ITER(pkm, fe) {
     PK_ADD_MEMORY_CANARY(fe);
 
     if (fe->fe_hostname == NULL || fe->ai.ai_addr == NULL) continue;
@@ -846,6 +835,26 @@ int pkm_reconnect_all(struct pk_manager* pkm, int ignore_errors) {
              "%d: pkm_reconnect_all: Ignored, changes still in flight",
              fe->conn.sockfd);
       continue;
+    }
+
+    /* Ignore this relay if we already have a live connection to the same
+     * one using a different IP (recognized by identical UUIDs).
+     */
+    if (fe->fe_uuid != NULL) {
+      struct pk_tunnel* live = NULL;
+      PK_TUNNEL_ITER(pkm, other_fe) {
+        if ((fe != other_fe) &&
+            (other_fe->fe_uuid != NULL) &&
+            (other_fe->conn.sockfd > -1) &&
+            (0 == strcmp(other_fe->fe_uuid, fe->fe_uuid)))
+          live = other_fe;
+      }
+      if (live != NULL) {
+        pk_log(PK_LOG_MANAGER_DEBUG,
+               "Not making second connection to %s, %d is live.",
+               fe->fe_uuid, live->conn.sockfd);
+        continue;
+      }
     }
 
     if ((fe->requests == NULL) ||
@@ -950,14 +959,13 @@ int pkm_reconnect_all(struct pk_manager* pkm, int ignore_errors) {
 }
 
 int pkm_disconnect_unused(struct pk_manager* pkm) {
-  struct pk_tunnel *fe;
   struct pk_backend_conn* pkb;
   char buffer[1025];
   unsigned int status;
   int i, j, pass, disconnect, disconnected, live, ping_window;
 
   PK_TRACE_FUNCTION;
-  ping_window = time(0) - 4*pkm->housekeeping_interval_min;
+  ping_window = pk_time() - 4*pkm->housekeeping_interval_min;
 
   /* The lock must already be held, or we may have nasty bugs. */
   assert(0 != pkm_reconfig_start(pkm));
@@ -969,9 +977,7 @@ int pkm_disconnect_unused(struct pk_manager* pkm) {
   pkm_block(pkm);
   for (pass = 1; pass <= 2; pass++) {
     live = disconnect = disconnected = 0;
-    for (i = 0; i < pkm->tunnel_max; i++) {
-      fe = (pkm->tunnels + i);
-
+    PK_TUNNEL_ITER(pkm, fe) {
       if (fe->fe_hostname == NULL) continue;
 
       /* Check this before incrementing the live count, as we're not sure
@@ -1043,13 +1049,12 @@ static void pkm_tick_cb(EV_P_ ev_async* w, int revents)
 {
   int i, pingsize;
   char ping[PK_REJECT_MAXSIZE];
-  struct pk_tunnel* fe;
   struct pk_manager* pkm = (struct pk_manager*) w->data;
   time_t next_tick = pkm->next_tick;
   time_t max_tick;
-  time_t now = time(0);
+  time_t now = pk_time();
   time_t increment = (next_tick / 3);
-  time_t inactive = now - pkm->next_tick - increment;
+  time_t inactive = now - PK_HOUSEKEEPING_INTERVAL_MAX_MIN;
 
   PK_TRACE_FUNCTION;
   pkw_pet_watchdog();
@@ -1064,9 +1069,10 @@ static void pkm_tick_cb(EV_P_ ev_async* w, int revents)
   {
     pkm->timer.repeat = pkm->next_tick;
     ev_timer_again(pkm->loop, &(pkm->timer));
-    pk_log(PK_LOG_MANAGER_INFO, "Tick!  [repeating=%s, next=%d, tunnels=%d, v=%s]",
+    pk_log(PK_LOG_MANAGER_INFO,
+           "Tick!  [repeating=%s, next=%d, status=%d, tunnels=%d, v=%s]",
            pkm->enable_timer ? "yes" : "no", pkm->next_tick,
-           pk_state.live_tunnels, PK_VERSION);
+           pkm->status, pk_state.live_tunnels, PK_VERSION);
 
     /* We slow down exponentially by default... */
     next_tick += increment;
@@ -1090,8 +1096,9 @@ static void pkm_tick_cb(EV_P_ ev_async* w, int revents)
   }
   else {
     ev_timer_stop(pkm->loop, &(pkm->timer));
-    pk_log(PK_LOG_MANAGER_INFO, "Tick!  [repeating=%s, stopped, v=%s]",
-           pkm->enable_timer ? "yes" : "no", PK_VERSION);
+    pk_log(PK_LOG_MANAGER_INFO,
+           "Tick!  [repeating=%s, stopped, status=%d, v=%s]",
+           pkm->enable_timer ? "yes" : "no", pkm->status, PK_VERSION);
     /* Reset interval. */
     next_tick = 1 + pkm->housekeeping_interval_min;
   }
@@ -1100,7 +1107,7 @@ static void pkm_tick_cb(EV_P_ ev_async* w, int revents)
    * process is already running. */
   pingsize = 0;
   if (0 == pkm_reconfig_start(pkm)) {
-    for (i = 0, fe = pkm->tunnels; i < pkm->tunnel_max; i++, fe++) {
+    PK_TUNNEL_ITER(pkm, fe) {
       if ((fe->conn.sockfd >= 0) && !(fe->conn.status & CONN_STATUS_CHANGING)) {
         /* If dead, shut 'em down. */
         if (fe->conn.activity < fe->last_ping - 4*pkm->housekeeping_interval_min)
@@ -1114,7 +1121,9 @@ static void pkm_tick_cb(EV_P_ ev_async* w, int revents)
           if (pingsize == 0) pingsize = pk_format_ping(ping);
           fe->last_ping = now;
           pkc_write(&(fe->conn), ping, pingsize);
-          pk_log(PK_LOG_TUNNEL_DATA, "%d: Sent PING.", fe->conn.sockfd);
+          pk_log(PK_LOG_TUNNEL_DATA,
+              "%d: Sent PING (idle=%ds>%ds)",
+              fe->conn.sockfd, now - fe->conn.activity, now - inactive);
           next_tick = 1 + pkm->housekeeping_interval_min;
         }
       }
@@ -1124,7 +1133,7 @@ static void pkm_tick_cb(EV_P_ ev_async* w, int revents)
   pkm_yield_start(pkm);
 
   /* Finally, trigger the tunnel check on the blocking thread. */
-  if (pkm->last_world_update + pkm->check_world_interval < time(0)) {
+  if (pkm->last_world_update + pkm->check_world_interval < pk_time()) {
     pkb_add_job(&(pkm->blocking_jobs), PK_CHECK_WORLD, 0, pkm);
     /* After checking the state of the world, we are a bit more aggressive
      * about following up on things, reset the fallback. */
@@ -1168,16 +1177,15 @@ void pkm_set_timer_enabled(struct pk_manager* pkm, int enabled) {
 }
 
 static void pkm_reset_manager(struct pk_manager* pkm) {
-  int i;
   struct pk_conn* pkc;
 
   PK_TRACE_FUNCTION;
 
-  for (i = 0; i < pkm->kite_max; i++) {
-    pk_reset_pagekite(pkm->kites+i);
+  PK_KITE_ITER(pkm, kite) {
+    pk_reset_pagekite(kite);
   }
-  for (i = 0; i < pkm->tunnel_max; i++) {
-    pkc = &((pkm->tunnels+i)->conn);
+  PK_TUNNEL_ITER(pkm, fe) {
+    pkc = &(fe->conn);
     if (pkc->status != CONN_STATUS_UNKNOWN) {
       ev_io_stop(pkm->loop, &(pkc->watch_r));
       ev_io_stop(pkm->loop, &(pkc->watch_w));
@@ -1185,7 +1193,7 @@ static void pkm_reset_manager(struct pk_manager* pkm) {
       pkc_reset_conn(pkc, CONN_STATUS_ALLOCATED);
     }
   }
-  for (i = 0; i < pkm->be_conn_max; i++) {
+  for (int i = 0; i < pkm->be_conn_max; i++) {
     pkc = &((pkm->be_conns+i)->conn);
     if (pkc->status != CONN_STATUS_UNKNOWN) {
       ev_io_stop(pkm->loop, &(pkc->watch_r));
@@ -1202,8 +1210,6 @@ static struct pk_pagekite* pkm_find_kite(struct pk_manager* pkm,
                                          const char* domain,
                                          int port)
 {
-  int which;
-  struct pk_pagekite* kite;
   struct pk_pagekite* found;
 
   PK_TRACE_FUNCTION;
@@ -1211,8 +1217,7 @@ static struct pk_pagekite* pkm_find_kite(struct pk_manager* pkm,
   /* NOTE: This is O(N), which we deem OK since backends should rarely
    *       have a huge number of kites configured. */
   found = NULL;
-  for (which = 0; which < pkm->kite_max; which++) {
-    kite = pkm->kites+which;
+  PK_KITE_ITER(pkm, kite) {
     if (kite->protocol[0] != '\0') {
       if ((0 == strcasecmp(domain, kite->public_domain)) &&
           (0 == strcasecmp(protocol, kite->protocol))) {
@@ -1232,8 +1237,8 @@ struct pk_pagekite* pkm_add_kite(struct pk_manager* pkm,
                                  const char* auth_secret,
                                  const char* local_domain, int local_port)
 {
-  int which;
   char *pp;
+  int which = 0;
   struct pk_pagekite* kite = NULL;
 
   PK_TRACE_FUNCTION;
@@ -1242,9 +1247,12 @@ struct pk_pagekite* pkm_add_kite(struct pk_manager* pkm,
     return pk_err_null(ERR_RAW_NEEDS_PUBPORT);
 
   /* FIXME: This is O(N), we'll need a nicer data structure for tunnels */
-  for (which = 0; which < pkm->kite_max; which++) {
-    kite = pkm->kites+which;
-    if (kite->protocol[0] == '\0') break;
+  PK_KITE_ITER(pkm, k) {
+    which++;
+    if (k->protocol[0] == '\0') {
+      kite = k;
+      break;
+    }
   }
   if (which >= pkm->kite_max)
     return pk_err_null(ERR_NO_MORE_KITES);
@@ -1277,7 +1285,7 @@ int pkm_add_listener(struct pk_manager* pkm,
                      pagekite_callback_t callback_func,
                      void* callback_data)
 {
-  int ok, errors, lport;
+  int ok, errors, lport, rv;
   struct addrinfo hints;
   struct addrinfo* result;
   struct addrinfo* rp;
@@ -1287,14 +1295,16 @@ int pkm_add_listener(struct pk_manager* pkm,
   PK_TRACE_FUNCTION;
 
   memset(&hints, 0, sizeof(struct addrinfo));
+  hints.ai_flags = AI_ADDRCONFIG;
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   sprintf(sport, "%d", port);
 
   lport = ok = errors = 0;
-  if (0 != getaddrinfo(hostname, sport, &hints, &result)) {
+  if (0 != (rv = getaddrinfo(hostname, sport, &hints, &result))) {
     pk_log(PK_LOG_BE_CONNS|PK_LOG_ERROR,
-           "pkm_add_listener: getaddrinfo() failed for %s", hostname);
+           "pkm_add_listener: getaddrinfo(%s, %s) failed:",
+           hostname, sport, gai_strerror(rv));
     errors++;
   }
   else {
@@ -1362,6 +1372,7 @@ int pkm_lookup_and_add_frontend(struct pk_manager* pkm,
   if (port < 1) port = 443;
 
   memset(&hints, 0, sizeof(struct addrinfo));
+  hints.ai_flags = AI_ADDRCONFIG;
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   sprintf(sport, "%d", port);
@@ -1383,6 +1394,11 @@ int pkm_lookup_and_add_frontend(struct pk_manager* pkm,
     }
     freeaddrinfo(result);
   }
+  else {
+    pk_log(PK_LOG_BE_CONNS|PK_LOG_ERROR,
+           "pkm_lookup_and_add_frontend: getaddrinfo(%s, %s) failed: %s",
+           hostname, sport, gai_strerror(rv));
+  }
 
   if (!count && add_null_record) {
     if (NULL != pkm_add_frontend_ai(pkm, NULL, hostname, port,
@@ -1401,8 +1417,6 @@ struct pk_tunnel* pkm_add_frontend_ai(struct pk_manager* pkm,
                                       const char* hostname, int port,
                                       int conn_status_flags)
 {
-  int which;
-  struct pk_tunnel* fe;
   struct pk_tunnel* adding = NULL;
 
   PK_TRACE_FUNCTION;
@@ -1410,8 +1424,7 @@ struct pk_tunnel* pkm_add_frontend_ai(struct pk_manager* pkm,
   /* Scan the front-end list to see if we already have this IP or,
    * if not, find an available slot.
    */
-  for (which = 0; which < pkm->tunnel_max; which++) {
-    fe = pkm->tunnels+which;
+  PK_TUNNEL_ITER(pkm, fe) {
     if (fe->fe_hostname == NULL) {
       if (adding == NULL) adding = fe;
     }
@@ -1420,7 +1433,7 @@ struct pk_tunnel* pkm_add_frontend_ai(struct pk_manager* pkm,
              (ai->ai_addrlen > 0) &&
              (0 == addrcmp(fe->ai.ai_addr, ai->ai_addr)))
     {
-      fe->last_configured = time(0);
+      fe->last_configured = pk_time();
       return NULL;
     }
   }
@@ -1434,7 +1447,7 @@ struct pk_tunnel* pkm_add_frontend_ai(struct pk_manager* pkm,
   adding->error_count = 0;
   adding->request_count = 0;
   adding->priority = 0;
-  adding->last_configured = time(0);
+  adding->last_configured = pk_time();
 
   return adding;
 }
@@ -1461,7 +1474,7 @@ struct pk_backend_conn* pkm_alloc_be_conn(struct pk_manager* pkm,
    *        gracefully.
    */
 
-  max_age = time(0);
+  max_age = pk_time();
   pkb_oldest = NULL;
   shift = pkm_sid_shift(sid);
   for (i = 0; i < pkm->be_conn_max; i++) {
@@ -1486,7 +1499,7 @@ struct pk_backend_conn* pkm_alloc_be_conn(struct pk_manager* pkm,
   /* If we get this far, we found no empty slots. Let's complain to the
    * log and, if so configured, kick out the oldest idle connection. */
   if (NULL != (pkb = pkb_oldest)) {
-    max_age = time(0) - pkb->conn.activity;
+    max_age = pk_time(0) - pkb->conn.activity;
     evicting = (pk_state.conn_eviction_idle_s &&
                (pk_state.conn_eviction_idle_s < max_age));
 
@@ -1629,13 +1642,13 @@ struct pk_manager* pkm_manager_init(struct ev_loop* loop,
   pkm->tunnels = (struct pk_tunnel *) pkm->buffer;
   pkm->tunnel_max = tunnels;
   pkm->buffer += sizeof(struct pk_tunnel) * tunnels;
-  for (i = 0; i < tunnels; i++) {
-    (pkm->tunnels + i)->fe_hostname = NULL;
-    (pkm->tunnels + i)->ai.ai_addr = NULL;
-    (pkm->tunnels + i)->ai.ai_canonname = NULL;
-    (pkm->tunnels + i)->requests = (struct pk_kite_request*) pkm->buffer;
+  PK_TUNNEL_ITER(pkm, fe) {
+    fe->fe_hostname = NULL;
+    fe->ai.ai_addr = NULL;
+    fe->ai.ai_canonname = NULL;
+    fe->requests = (struct pk_kite_request*) pkm->buffer;
 #ifdef HAVE_OPENSSL
-    (pkm->tunnels + i)->conn.ssl = NULL;
+    fe->conn.ssl = NULL;
 #endif
     pkm->buffer += (sizeof(struct pk_kite_request) * kites);
   }
@@ -1688,7 +1701,7 @@ struct pk_manager* pkm_manager_init(struct ev_loop* loop,
     pkm->buffer_bytes_free -= parse_buffer_bytes;
   }
 
-  pkm->fancy_pagekite_net_rejection = 1;
+  pkm->fancy_pagekite_net_rejection_url = PK_REJECT_FANCY_URL;
   pkm->enable_watchdog = 0;
   pkm->want_spare_frontends = 0;
   pkm->housekeeping_interval_min = PK_HOUSEKEEPING_INTERVAL_MIN;
@@ -1754,10 +1767,11 @@ void pkm_manager_free(struct pk_manager* pkm)
     free(pkm->dynamic_dns_url);
   }
 
-  for (int which = 0; which < pkm->tunnel_max; which++) {
-    struct pk_tunnel* fe = pkm->tunnels+which;
+  PK_TUNNEL_ITER(pkm, fe) {
+    if (fe->fe_uuid != NULL) free(fe->fe_uuid);
     if (fe->fe_hostname != NULL) free(fe->fe_hostname);
     free_addrinfo_data(&fe->ai);
+    fe->fe_uuid = fe->fe_hostname = NULL;
   }
 
   if (pkm->was_malloced) {

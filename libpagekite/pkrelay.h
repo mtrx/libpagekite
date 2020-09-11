@@ -3,7 +3,7 @@ pkrelay.h - Logic specific to front-end relays
 
 *******************************************************************************
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the  GNU Affero General Public License, version 3.0 or above, as
@@ -24,7 +24,5 @@ struct pk_listener {
   int lport;
 };
 
-struct pk_listener* pkr_add_listener(struct pk_manager*, int);
-struct pk_listener* pkr_add_listener_v6(struct pk_manager*, int);
 void pkr_relay_incoming(int, void*);
 int pkrelay_test(void);

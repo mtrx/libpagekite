@@ -1,7 +1,7 @@
 /******************************************************************************
 pkproto.c - A basic serializer/deserializer for the PageKite tunnel protocol.
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -64,7 +64,7 @@ void frame_reset(struct pk_frame* frame)
   frame->raw_frame = NULL;
 }
 
-void chunk_reset_values(struct pk_chunk* chunk)
+void pk_chunk_reset_values(struct pk_chunk* chunk)
 {
   PK_ADD_MEMORY_CANARY(chunk);
   chunk->sid = NULL;
@@ -89,9 +89,9 @@ void chunk_reset_values(struct pk_chunk* chunk)
   chunk->data = NULL;
 }
 
-void chunk_reset(struct pk_chunk* chunk)
+void pk_chunk_reset(struct pk_chunk* chunk)
 {
-  chunk_reset_values(chunk);
+  pk_chunk_reset_values(chunk);
   frame_reset(&(chunk->frame));
 }
 
@@ -108,7 +108,7 @@ struct pk_parser* pk_parser_init(int buf_length, char* buf,
 
   parser->chunk = (struct pk_chunk *) (buf + parser_size);
   parser_size += sizeof(struct pk_chunk);
-  chunk_reset(parser->chunk);
+  pk_chunk_reset(parser->chunk);
 
   parser->chunk->frame.raw_frame = (char *) (buf + parser_size);
 
@@ -125,7 +125,7 @@ void pk_parser_reset(struct pk_parser *parser)
   PK_ADD_MEMORY_CANARY(parser);
   parser->buffer_bytes_left += parser->chunk->frame.raw_length;
   frame_reset_values(&(parser->chunk->frame));
-  chunk_reset_values(parser->chunk);
+  pk_chunk_reset_values(parser->chunk);
 }
 
 int parse_frame_header(struct pk_frame* frame)
@@ -388,7 +388,7 @@ size_t pk_format_frame(char* buf, const char* sid,
   size_t hlen;
   if (!sid) sid = "";
   hlen = strlen(sid) + strlen(headers) - 2;
-  hlen = sprintf(buf, "%lx\r\n", hlen + bytes);
+  hlen = sprintf(buf, "%zx\r\n", hlen + bytes);
   return hlen + sprintf(buf + hlen, headers, sid);
 }
 
@@ -418,6 +418,57 @@ size_t pk_format_reply(char* buf, const char* sid,
     return hlen;
 }
 
+ssize_t pk_format_chunk(char* buf, size_t maxbytes, struct pk_chunk* chunk)
+{
+  size_t bytes = 0;
+  size_t hlen = pk_reply_overhead(chunk->sid, maxbytes);
+  char* tbuf = malloc(maxbytes - hlen);
+  if (tbuf == NULL) return (pk_error = ERR_PARSE_NO_MEMORY);
+
+  #define free_and_return(rv) { free(tbuf); return rv; }
+  #define _add_str(h, v) if (v != NULL) { \
+                  if (hlen + bytes + strlen(h) + strlen(v) + 5 <= maxbytes) { \
+                    bytes += sprintf(tbuf + bytes, "%s: %s\r\n", h, v); \
+                  } else free_and_return(pk_error = ERR_PARSE_NO_MEMORY); }
+  #define _add_int(h, v) if (v >= 0) { \
+                  if (hlen + bytes + strlen(h) + 10 + 5 <= maxbytes) { \
+                    bytes += sprintf(tbuf + bytes, "%s: %d\r\n", h, v); \
+                  } else free_and_return(pk_error = ERR_PARSE_NO_MEMORY); }
+  #define _add_sst(h, v) if (v >= 0) { \
+                  if (hlen + bytes + strlen(h) + 10 + 5 <= maxbytes) { \
+                    bytes += sprintf(tbuf + bytes, "%s: %ld\r\n", h, v); \
+                  } else free_and_return(pk_error = ERR_PARSE_NO_MEMORY); }
+
+  _add_str("EOF",    chunk->eof);
+  _add_str("NOOP",   chunk->noop);
+  _add_str("PING",   chunk->ping);
+  _add_str("Host",   chunk->request_host);
+  _add_int("Port",   chunk->request_port);
+  _add_str("Proto",  chunk->request_proto);
+  _add_str("RIP",    chunk->remote_ip);
+  _add_int("RPort",  chunk->remote_port);
+  _add_str("RTLS",   chunk->remote_tls);
+  _add_sst("SKB",    chunk->remote_sent_kb);
+  _add_int("QDays",  chunk->quota_days);
+  _add_int("QConns", chunk->quota_conns);
+  _add_int("Quota",  chunk->quota_mb);
+
+  bytes += sprintf(tbuf + bytes, "\r\n");
+
+  if (chunk->length > 0) {
+    if (hlen + chunk->length + bytes - 2 > maxbytes) {
+      free_and_return(pk_error = ERR_PARSE_NO_MEMORY);
+    }
+    memcpy(tbuf + bytes, chunk->data, chunk->length);
+    bytes += chunk->length;
+  }
+
+  hlen = pk_format_frame(buf, chunk->sid, "SID: %s\r\n", bytes);
+  memcpy(buf + hlen, tbuf, bytes);
+
+  free_and_return(hlen + bytes);
+}
+
 size_t pk_format_eof(char* buf, const char* sid, int how)
 {
   char format[64];
@@ -444,38 +495,91 @@ size_t pk_format_ping(char* buf)
   return pk_format_frame(buf, "", "NOOP: 1%s\r\nPING: 1\r\n\r\n", 0);
 }
 
+size_t pk_format_http_rejection(
+  char* buf,
+  int frontend_sockfd,
+  const char* default_fancy_url,
+  const char* request_proto,
+  const char* request_host)
+{
+  char pre[PK_REJECT_MAXSIZE];
+  char relay_ip[128];
+  char* fancy_url = NULL;
+  char* post = NULL;
+
+  if (default_fancy_url && *default_fancy_url) {
+    struct pke_event* ev = pke_post_blocking_event(NULL,
+      PK_EV_CFG_FANCY_URL, 0, request_host, NULL, &fancy_url);
+    if (NULL == fancy_url) fancy_url = (char*) default_fancy_url;
+
+    relay_ip[0] = '\0';
+    if (frontend_sockfd != PK_REJECT_BACKEND) {
+      struct sockaddr_in sin;
+      socklen_t len = sizeof(sin);
+      if (-1 != getsockname(frontend_sockfd, (struct sockaddr*) &sin, &len))
+        in_ipaddr_to_str((struct sockaddr*) &sin, relay_ip, 128);
+    }
+
+    sprintf(pre, PK_REJECT_FANCY_PRE,
+                 fancy_url,
+                 (frontend_sockfd == PK_REJECT_BACKEND) ? "BE" : "FE",
+                 pk_state.app_id_short,
+                 request_proto, request_host, relay_ip);
+    post = PK_REJECT_FANCY_POST;
+
+    if (ev) pke_free_event(NULL, ev->event_code);
+    if (fancy_url != default_fancy_url) free(fancy_url);
+  }
+  else {
+    pre[0] = '\0';
+    post = pre;
+  }
+
+  return sprintf(buf, PK_REJECT_FMT,
+                      pre,
+                      (frontend_sockfd == PK_REJECT_BACKEND) ? "be" : "fe",
+                      pk_state.app_id_short,
+                      request_proto, request_host, post);
+}
+
 
 
 
 /**[ Connecting ]**************************************************************/
 
-int pk_make_bsalt(struct pk_kite_request* kite_r) {
+int pk_make_salt(char* salt) {
   uint8_t buffer[1024];
   char digest[41];
 
-  sprintf((char*) buffer, "%s %x %x", random_junk, rand(), (int) time(0));
+  PK_TRACE_FUNCTION;
+
+  int slen = sprintf((char*) buffer, "%x %x", rand(), (int) time(0));
 
 #ifdef HAVE_OPENSSL
   SHA_CTX context;
   SHA1_Init(&context);
-  SHA1_Update(&context, buffer, strlen((const char*) buffer));
+  SHA1_Update(&context, (uint8_t*) random_junk, 31);
+  SHA1_Update(&context, buffer, slen);
   SHA1_Final((unsigned char*) buffer, &context);
 #else
   PD_SHA1_CTX context;
   pd_sha1_init(&context);
-  pd_sha1_update(&context, buffer, strlen((const char*) buffer));
+  pd_sha1_update(&context, (uint8_t*) random_junk, 31);
+  pd_sha1_update(&context, buffer, slen);
   pd_sha1_final(&context, buffer);
 #endif
   digest_to_hex(buffer, digest);
-  strncpyz(kite_r->bsalt, digest, PK_SALT_LENGTH);
+  strncpyz(salt, digest, PK_SALT_LENGTH);
 
   return 1;
 }
 
-char* pk_sign(const char* token, const char* secret, const char* payload,
-              int length, char *buffer)
+char* pk_sign(const char* token, const char* secret, time_t ts,
+              const char* payload, int length, char *buffer)
 {
-  char tbuffer[128], scratch[10240];
+  char tbuffer[128], tsbuf[16], scratch[10240];
+
+  PK_TRACE_FUNCTION;
 
   if (token == NULL) {
     sprintf(scratch, "%8.8x", rand());
@@ -483,19 +587,29 @@ char* pk_sign(const char* token, const char* secret, const char* payload,
     SHA_CTX context;
     SHA1_Init(&context);
     SHA1_Update(&context, (uint8_t*) secret, strlen(secret));
+    SHA1_Update(&context, (uint8_t*) random_junk, 31);
     SHA1_Update(&context, (uint8_t*) scratch, 8);
     SHA1_Final((unsigned char*) scratch, &context);
 #else
     PD_SHA1_CTX context;
     pd_sha1_init(&context);
     pd_sha1_update(&context, (uint8_t*) secret, strlen(secret));
+    pd_sha1_update(&context, (uint8_t*) random_junk, 31);
     pd_sha1_update(&context, (uint8_t*) scratch, 8);
     pd_sha1_final(&context, scratch);
 #endif
     digest_to_hex((uint8_t*) scratch, tbuffer);
     token = tbuffer;
   }
-  strcpy(buffer, token);
+  strncpy(buffer, token, 8);
+  buffer[8] = '\0';
+
+  /* Optionally embed a timestamp to the resolution of 10 minutes */
+  if (ts > 0) {
+    sprintf(tsbuf, "%lx", ts / 600);
+    buffer[0] = 't';
+  }
+  else tsbuf[0] = '\0';
 
 #ifdef HAVE_OPENSSL
   SHA_CTX context;
@@ -503,7 +617,8 @@ char* pk_sign(const char* token, const char* secret, const char* payload,
   SHA1_Update(&context, (uint8_t*) secret, strlen(secret));
   if (payload)
     SHA1_Update(&context, (uint8_t*) payload, strlen(payload));
-  SHA1_Update(&context, (uint8_t*) token, 8);
+  SHA1_Update(&context, (uint8_t*) tsbuf, strlen(tsbuf));
+  SHA1_Update(&context, (uint8_t*) buffer, 8);
   SHA1_Final((unsigned char*)scratch, &context);
 #else
   PD_SHA1_CTX context;
@@ -511,7 +626,8 @@ char* pk_sign(const char* token, const char* secret, const char* payload,
   pd_sha1_update(&context, (uint8_t*) secret, strlen(secret));
   if (payload)
     pd_sha1_update(&context, (uint8_t*) payload, strlen(payload));
-  pd_sha1_update(&context, (uint8_t*) token, 8);
+  pd_sha1_update(&context, (uint8_t*) tsbuf, strlen(tsbuf));
+  pd_sha1_update(&context, (uint8_t*) buffer, 8);
   pd_sha1_final(&context, scratch);
 #endif
   digest_to_hex((uint8_t*) scratch, buffer+8);
@@ -519,27 +635,52 @@ char* pk_sign(const char* token, const char* secret, const char* payload,
   return buffer;
 }
 
-int pk_sign_kite_request(char *buffer, struct pk_kite_request* kite_r, int salt) {
-  char request[1024];
-  char request_sign[1024];
-  char request_salt[1024];
+char *pk_prepare_kite_challenge(char* buffer, struct pk_kite_request* kite_r,
+                                char* secret, time_t ts) {
   char proto[64];
   struct pk_pagekite* kite;
 
-  kite = kite_r->kite;
-  if (kite_r->bsalt[0] == '\0')
-    if (pk_make_bsalt(kite_r) < 0)
-      return 0;
+  PK_TRACE_FUNCTION;
 
+  kite = kite_r->kite;
   if (kite->public_port > 0)
     sprintf(proto, "%s-%d", kite->protocol, kite->public_port);
   else
     strcpy(proto, kite->protocol);
 
-  sprintf(request, "%s:%s:%s:%s", proto, kite->public_domain,
-                                         kite_r->bsalt, kite_r->fsalt);
+  if (secret != NULL) {
+    char* npe = buffer;
+    npe += sprintf(buffer, "%s:%s:%s", proto, kite->public_domain,
+                                       kite_r->bsalt);
+    pk_sign(kite_r->fsalt[0] ? kite_r->fsalt : NULL, secret, ts,
+            buffer, PK_SALT_LENGTH, npe + 1);
+    *npe = ':';
+  }
+  else {
+    sprintf(buffer, "%s:%s:%s:%s", proto, kite->public_domain,
+                                   kite_r->bsalt, kite_r->fsalt);
+  }
+
+  return buffer;
+}
+
+int pk_sign_kite_request(char *buffer, struct pk_kite_request* kite_r, int salt) {
+  char request[1024];
+  char request_sign[1024];
+  char request_salt[1024];
+  struct pk_pagekite* kite;
+
+  PK_TRACE_FUNCTION;
+
+  kite = kite_r->kite;
+  if (kite_r->bsalt[0] == '\0')
+    if (pk_make_salt(kite_r->bsalt) < 0)
+      return 0;
+
+  pk_prepare_kite_challenge(request, kite_r, NULL, 0);
+
   sprintf(request_salt, "%8.8x", salt);
-  pk_sign(request_salt, kite->auth_secret, request, 36, request_sign);
+  pk_sign(request_salt, kite->auth_secret, 0, request, 36, request_sign);
 
   strcat(request, ":");
   strcat(request, request_sign);
@@ -547,42 +688,53 @@ int pk_sign_kite_request(char *buffer, struct pk_kite_request* kite_r, int salt)
   return sprintf(buffer, PK_HANDSHAKE_KITE, request);
 }
 
-char *pk_parse_kite_request(struct pk_kite_request* kite_r, const char *line)
+char *pk_parse_kite_request(
+  struct pk_kite_request* kite_r,
+  char** signature,
+  const char *line)
 {
   char* copy;
   char* p;
   char* public_domain;
   char* bsalt;
   char* fsalt;
+  char* bsig;
   char* protocol;
   struct pk_pagekite* kite = kite_r->kite;
 
-  copy = malloc(strlen(line)+1);
+  PK_TRACE_FUNCTION;
+
+  int llen = strlen(line);
+  copy = malloc(llen+1);
   strcpy(copy, line);
 
+  char* end = copy + llen;
+  *end = '\0';
+
+  /* Parse the string... */
   protocol = strchr(copy, ' ');
-  if (protocol == NULL)
+  if (protocol == NULL) {
     protocol = copy;
-  else
+  }
+  else {
     protocol++;
-
-  if (NULL == (public_domain = strchr(protocol, ':'))) {
-    free(copy);
-    return pk_err_null(ERR_PARSE_NO_KITENAME);
   }
-  *(public_domain++) = '\0';
-
-  if (NULL == (bsalt = strchr(public_domain, ':'))) {
-    free(copy);
-    return pk_err_null(ERR_PARSE_NO_BSALT);
+  if (NULL != (public_domain = strchr(protocol, ':'))) {
+    *(public_domain++) = '\0';
+    if ((public_domain < end) && NULL != (bsalt = strchr(public_domain, ':'))) {
+      *(bsalt++) = '\0';
+      if ((bsalt < end) && NULL != (fsalt = strchr(bsalt, ':'))) {
+        *(fsalt++) = '\0';
+        if ((fsalt < end) && NULL != (bsig = strchr(fsalt, ':'))) {
+          *(bsig++) = '\0';
+        }
+        else bsig = "";
+      }
+      else fsalt = bsig = "";
+    }
+    else bsalt = fsalt = bsig = "";
   }
-  *(bsalt++) = '\0';
-
-  if (NULL == (fsalt = strchr(bsalt, ':'))) {
-    free(copy);
-    return pk_err_null(ERR_PARSE_NO_FSALT);
-  }
-  *(fsalt++) = '\0';
+  else public_domain = bsalt = fsalt = bsig = "";
 
   /* Error out if things are too large. */
   if ((strlen(protocol) > PK_PROTOCOL_LENGTH) ||
@@ -598,17 +750,151 @@ char *pk_parse_kite_request(struct pk_kite_request* kite_r, const char *line)
   strncpyz(kite->public_domain, public_domain, PK_DOMAIN_LENGTH);
   strncpyz(kite_r->bsalt, bsalt, PK_SALT_LENGTH);
   strncpyz(kite_r->fsalt, fsalt, PK_SALT_LENGTH);
-
   if (NULL != (p = strchr(kite->protocol, '-'))) {
     *p++ = '\0';
     sscanf(p, "%d", &(kite->public_port));
   }
   else
     kite->public_port = 0;
+  if (*bsig && signature) {
+    *signature = strdup(bsig);
+  }
+  else if (signature)
+    *signature = NULL;
 
+  /* Cleanup */
   free(copy);
+
+  /* Pass judgement */
+  if ('\0' == *public_domain) return pk_err_null(ERR_PARSE_NO_KITENAME);
+  if ('\0' == *bsalt) return pk_err_null(ERR_PARSE_NO_BSALT);
+  if ('\0' == *fsalt) return pk_err_null(ERR_PARSE_NO_FSALT);
   return kite->public_domain;
 }
+
+struct pk_kite_request* pk_parse_pagekite_response(
+  char* buffer,
+  size_t bufsize,
+  char* session_id,
+  char* motd)
+{
+  PK_TRACE_FUNCTION;
+
+  /* Walk through the buffer and count how many responses we have.
+   * This will overshoot a bit, but that should be harmless. */
+  int responses = 1;
+  char* p = buffer;
+  char lastc = buffer[bufsize - 1];
+  buffer[bufsize - 1] = '\0'; /* Ensure strcasestr will terminate */
+  while (NULL != (p = strcasestr(p, "X-PageKite-"))) {
+    responses++;
+    p++;
+  }
+  buffer[bufsize - 1] = lastc; /* Put things back the way they were */
+
+  /* FIXME: Magic number. This prevents malicious remotes from making us
+   *        allocate arbitrary amounts of RAM, but also puts an undocumented
+   *        upper limit on how many kites we support per tunnel. */
+  if (responses >= 1000) return pk_err_null(ERR_NO_MORE_KITES);
+
+  /* Allocate space for pk_kite_request and pk_pagekite structures.
+   * We put the pk_kite_requests first, and then tack the pk_pagekites on
+   * to the end. The following math calculates first how much size we need
+   * for the pk_kite_request structures, and then recalculate in terms of
+   * pk_pagekite equivalents. These shenanigans allow us to get away with
+   * a single malloc() and easier cleanup elsewhere. */
+  int rsize = responses * sizeof(struct pk_kite_request);
+  int rskip = 1 + (rsize / sizeof(struct pk_pagekite)); /* +1 because / rounds down */
+  rsize = (rskip + responses) * sizeof(struct pk_pagekite);
+
+  struct pk_kite_request* res = malloc(rsize);
+  struct pk_kite_request* rp = res;
+  struct pk_pagekite* rpk = ((struct pk_pagekite*) res) + rskip;
+  if (res == NULL) return pk_err_null(ERR_NO_MORE_KITES);
+
+  /* Set the pk_pagekite pointer for each allocated pk_kite_request */
+  for (int i = 0; i < responses; i++) res[i].kite = &(rpk[i]);
+
+  /* Walk through the response header line-by-line and parse.
+   * This loop is destructive due to use of zero_first_eol.
+   */
+  int bytes;
+  p = buffer;
+  do {
+    PK_TRACE_LOOP("response line");
+
+    /* Note: We use zero_first_eol instead of zero_first_crlf, to be
+     *       more tolerant of slightly lame implementations. */
+    bytes = zero_first_eol(bufsize - (p-buffer), p);
+    rp->status = PK_KITE_UNKNOWN;
+
+                     /* 12345678901 = 11 bytes */
+    if (strncasecmp(p, "X-PageKite-", 11) == 0)
+    {
+                          /* 123 = 3 bytes */
+      if (strncasecmp(p+11, "OK:", 3) == 0) {
+        rp->status = PK_KITE_FLYING;
+      }
+                               /* 1234567 = 7 bytes */
+      else if (strncasecmp(p+11, "SSL-OK:", 7) == 0) {
+        /* FIXME: Note that we are OK with relay MITM SSL active! */
+        /* FIXME: Backtrack rp to avoid duplicate entries response? */
+      }
+                               /* 1234567890 = 10 bytes */
+      else if (strncasecmp(p+11, "Duplicate:", 10) == 0) {
+        rp->status = PK_KITE_DUPLICATE;
+      }
+                               /* 12345678 = 8 bytes */
+      else if (strncasecmp(p+11, "Invalid:", 8) == 0) {
+        rp->status = PK_KITE_INVALID;
+      }
+                               /* 123456789012 = 12 bytes */
+      else if (strncasecmp(p+11, "Invalid-Why:", 12) == 0) {
+        /* FIXME: Parse the reason out of the response */
+        /* FIXME: Backtrack rp to avoid duplicate entries response? */
+        pk_log(PK_LOG_TUNNEL_DATA, "Why: %s", p+11+13);
+      }
+                               /* 123456789 = 9 bytes */
+      else if (strncasecmp(p+11, "SignThis:", 9) == 0) {
+        rp->status = PK_KITE_WANTSIG;
+      }
+                               /* 123456 = 6 bytes */
+      else if (strncasecmp(p+11, "Quota:", 6) == 0) {
+        /* FIXME: Parse out current bandwidth quota value */
+      }
+                               /* 1234567 = 7 bytes */
+      else if (strncasecmp(p+11, "QConns:", 7) == 0) {
+        /* FIXME: Parse out current connection quota value */
+      }
+                               /* 123456 = 6 bytes */
+      else if (strncasecmp(p+11, "QDays:", 6) == 0) {
+        /* FIXME: Parse out current days-left quota value */
+      }
+      else if (session_id &&    /* 1234567890 = 10 bytes */
+               (strncasecmp(p+11, "SessionID:", 10) == 0)) {
+        strncpyz(session_id, p+11+10+1, PK_HANDSHAKE_SESSIONID_MAX);
+        pk_log(PK_LOG_TUNNEL_DATA, "Session ID is: %s", session_id);
+      }
+      else if (motd &&          /* 12345 = 5 bytes */
+               (strncasecmp(p+11, "Misc:", 5) == 0)) {
+        /* FIXME: Record/log the "misc" messages. */
+      }
+
+      if (rp->status != PK_KITE_UNKNOWN) {
+        if ((NULL != pk_parse_kite_request(rp, NULL, p)) ||
+            (rp->status != PK_KITE_FLYING)) {
+          rp++;
+        }
+      }
+    }
+
+    p += bytes;
+  } while (bytes);
+
+  rp->status = PK_KITE_UNKNOWN;
+  return res;
+}
+
 
 int pk_connect_ai(struct pk_conn* pkc, struct addrinfo* ai, int reconnecting,
                   unsigned int n, struct pk_kite_request* requests,
@@ -618,6 +904,8 @@ int pk_connect_ai(struct pk_conn* pkc, struct addrinfo* ai, int reconnecting,
   char buffer[16*1024], *p;
   struct pk_pagekite tkite;
   struct pk_kite_request tkite_r;
+
+  PK_TRACE_FUNCTION;
 
   pkc->status |= CONN_STATUS_CHANGING;
   pk_log(PK_LOG_TUNNEL_CONNS,
@@ -691,53 +979,46 @@ int pk_connect_ai(struct pk_conn* pkc, struct addrinfo* ai, int reconnecting,
   }
   pk_log(PK_LOG_TUNNEL_DATA, " - Parsing!");
 
-  /* OK, let's walk through the response header line-by-line and parse. */
   i = 0;
-  p = buffer;
-  do {
-    PK_TRACE_LOOP("response line");
+  struct pk_kite_request* rkites = NULL;
+  rkites = pk_parse_pagekite_response(buffer, sizeof(buffer), session_id, NULL);
 
-    bytes = zero_first_crlf(sizeof(buffer) - (p-buffer), p);
-
-                      /* 123456789012345678901 = 21 bytes */
-    if ((strncasecmp(p, "X-PageKite-Duplicate:", 21) == 0) ||
-        (strncasecmp(p, "X-PageKite-Invalid:", 19) == 0)) {
-      pk_log(PK_LOG_TUNNEL_CONNS, "%s", p);
-      pkc_reset_conn(pkc, CONN_STATUS_CHANGING|CONN_STATUS_ALLOCATED);
-      /* FIXME: Should update the status of each individual request. */
-      return (pk_error = (p[12] == 'u') ? ERR_CONNECT_DUPLICATE
-                                        : ERR_CONNECT_REJECTED);
-    }
-                     /* 12345678901234567890 = 20 bytes */
-    if (strncasecmp(p, "X-PageKite-SignThis:", 20) == 0) {
-      tkite_r.kite = &tkite;
-      if (NULL != pk_parse_kite_request(&tkite_r, p)) {
-        pk_log(PK_LOG_TUNNEL_DATA, " - Parsed: %s", p);
-        for (j = 0; j < n; j++) {
-          if ((requests[j].kite->protocol[0] != '\0') &&
-              (requests[j].kite->public_port == tkite.public_port) &&
-              (0 == strcmp(requests[j].kite->public_domain, tkite.public_domain)) &&
-              (0 == strcmp(requests[j].kite->protocol, tkite.protocol)))
-          {
-            pk_log(PK_LOG_TUNNEL_DATA, " - Matched: %s:%s",
-                                       requests[j].kite->protocol,
-                                       requests[j].kite->public_domain);
-            strncpyz(requests[j].fsalt, tkite_r.fsalt, PK_SALT_LENGTH);
-            i++;
+  if (NULL != rkites) {
+    struct pk_kite_request* pkr;
+    for (pkr = rkites; pkr->status != PK_KITE_UNKNOWN; pkr++) {
+      switch (pkr->status) {
+        case PK_KITE_REJECTED:
+        case PK_KITE_DUPLICATE:
+        case PK_KITE_INVALID:
+          pkc_reset_conn(pkc, CONN_STATUS_CHANGING|CONN_STATUS_ALLOCATED);
+          free(rkites);
+          return (pk_error = (
+            (pkr->status == PK_KITE_DUPLICATE) ? ERR_CONNECT_DUPLICATE
+                                               : ERR_CONNECT_REJECTED));
+        case PK_KITE_WANTSIG:
+          for (j = 0; j < n; j++) {
+            if ((requests[j].kite->protocol[0] != '\0') &&
+                (requests[j].kite->public_port == pkr->kite->public_port) &&
+                (0 == strcmp(requests[j].kite->public_domain, pkr->kite->public_domain)) &&
+                (0 == strcmp(requests[j].kite->protocol, pkr->kite->protocol)))
+            {
+              pk_log(PK_LOG_TUNNEL_DATA, " - Matched: %s:%s",
+                                         requests[j].kite->protocol,
+                                         requests[j].kite->public_domain);
+              strncpyz(requests[j].fsalt, pkr->fsalt, PK_SALT_LENGTH);
+              i++;
+            }
           }
-        }
-      }
-      else {
-        pk_log(PK_LOG_TUNNEL_DATA, " - Bogus: %s", p);
+          break;
       }
     }
-    else if (session_id && /* 123456789012345678901 = 21 bytes */
-             (strncasecmp(p, "X-PageKite-SessionID:", 21) == 0)) {
-      strncpyz(session_id, p+22, PK_HANDSHAKE_SESSIONID_MAX);
-      pk_log(PK_LOG_TUNNEL_DATA, "Session ID is: %s", session_id);
-    }
-    p += bytes;
-  } while (bytes);
+    free(rkites);
+  }
+  else {
+    pkc_reset_conn(pkc, CONN_STATUS_CHANGING|CONN_STATUS_ALLOCATED);
+    pk_log(PK_LOG_TUNNEL_DATA, "No response parsed, treating as rejection.");
+    return (pk_error = ERR_CONNECT_REJECTED);
+  }
 
   if (i) {
     if (reconnecting) {
@@ -767,15 +1048,18 @@ int pk_connect(struct pk_conn* pkc, char *frontend, int port,
   char ports[16];
   struct addrinfo hints, *result, *rp;
 
+  PK_TRACE_FUNCTION;
+
   pkc->status |= CONN_STATUS_CHANGING;
   pk_log(PK_LOG_TUNNEL_CONNS, "pk_connect(%s:%d, %d, %p)",
                               frontend, port, n, requests);
 
   memset(&hints, 0, sizeof(struct addrinfo));
+  hints.ai_flags = AI_ADDRCONFIG;
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   sprintf(ports, "%d", port);
-  if (0 == getaddrinfo(frontend, ports, &hints, &result)) {
+  if (0 == (rv = getaddrinfo(frontend, ports, &hints, &result))) {
     for (rp = result; rp != NULL; rp = rp->ai_next) {
       rv = pk_connect_ai(pkc, rp, 0, n, requests, session_id, ctx, frontend);
       if ((rv >= 0) ||
@@ -787,6 +1071,9 @@ int pk_connect(struct pk_conn* pkc, char *frontend, int port,
     freeaddrinfo(result);
   }
   else {
+    pk_log(PK_LOG_TUNNEL_CONNS|PK_LOG_ERROR,
+           "pk_connect: getaddrinfo(%s, %s) failed:",
+           frontend, ports, gai_strerror(rv));
     return (pk_error = ERR_CONNECT_LOOKUP);
   }
   return (pk_error = ERR_CONNECT_CONNECT);
@@ -798,10 +1085,13 @@ int pk_http_forwarding_headers_hook(struct pk_chunk* chunk,
   static unsigned char rewrite_space[PARSER_BYTES_MAX + 256];
   char forwarding_headers[1024];
 
+  PK_TRACE_FUNCTION;
+
   if (chunk->first_chunk &&
       chunk->request_proto &&
       chunk->remote_ip &&
-      (0 == strcasecmp(chunk->request_proto, "http")) &&
+      ((0 == strcasecmp(chunk->request_proto, "http")) ||
+       (0 == strcasecmp(chunk->request_proto, "websocket"))) &&
       (strlen(chunk->remote_ip) < 128) &&
       (chunk->length < PARSER_BYTES_MAX))
   {
@@ -856,6 +1146,28 @@ static int pkproto_test_format_reply(void)
   size_t bytes = strlen(expect);
   assert(bytes == 11+pk_reply_overhead("12345", 11));
   assert(bytes == pk_format_reply(dest, "12345", 11, "Hello World"));
+  assert(0 == strncmp(expect, dest, bytes));
+  return 1;
+}
+
+static int pkproto_test_format_chunk(void)
+{
+  struct pk_chunk chunk;
+  char dest[1024];
+
+  pk_chunk_reset_values(&chunk);
+  chunk.sid = "1234";
+  chunk.eof = "1W";
+  chunk.quota_mb = 10;
+  chunk.data = "Potato salads";
+  chunk.length = strlen(chunk.data);
+  char* expect = "2e\r\nSID: 1234\r\nEOF: 1W\r\nQuota: 10\r\n\r\nPotato salads";
+  size_t bytes = strlen(expect);
+
+  /* Make sure our memory bounds are respected */
+  assert(ERR_PARSE_NO_MEMORY == pk_format_chunk(dest, bytes - 1, &chunk));
+  assert(bytes == pk_format_chunk(dest, bytes, &chunk));
+
   assert(0 == strncmp(expect, dest, bytes));
   return 1;
 }
@@ -985,10 +1297,10 @@ static int pkproto_test_alloc(unsigned int buf_len, char *buffer,
       (f_offs + p->buffer_bytes_left != buf_len))
   {
     printf("Offsets within buffer:\n");
-    printf(" Parser     %2.2d (size: %zd)\n", p_offs, sizeof(struct pk_parser));
-    printf(" Chunk      %2.2d (size: %zd)\n", c_offs, sizeof(struct pk_chunk));
-    printf(" Frame data %2.2d\n", f_offs);
-    printf(" Space left %2d/%d\n", p->buffer_bytes_left, buf_len);
+    printf(" Parser     %2.2u (size: %zu)\n", p_offs, sizeof(struct pk_parser));
+    printf(" Chunk      %2.2u (size: %zu)\n", c_offs, sizeof(struct pk_chunk));
+    printf(" Frame data %2.2u\n", f_offs);
+    printf(" Space left %2d/%u\n", p->buffer_bytes_left, buf_len);
     return 0;
   }
   return 1;
@@ -996,7 +1308,7 @@ static int pkproto_test_alloc(unsigned int buf_len, char *buffer,
 
 static int pkproto_test_make_bsalt(void) {
   struct pk_kite_request kite;
-  pk_make_bsalt(&kite);
+  pk_make_salt(kite.bsalt);
   assert(strlen(kite.bsalt) == 36);
   return 1;
 }
@@ -1026,14 +1338,18 @@ static int pkproto_test_sign_kite_request(void) {
 static int pkproto_test_parse_kite_request(void) {
   struct pk_pagekite kite;
   struct pk_kite_request kite_r;
+  char *signature;
 
   kite_r.kite = &kite;
-  pk_parse_kite_request(&kite_r, "foo: http-99:b.com:abacab:");
+  pk_parse_kite_request(&kite_r, &signature, "X-PageKite: http-99:b.com:abacab::sig");
   assert(99 == kite.public_port);
   assert(0 == strcmp(kite.public_domain, "b.com"));
   assert(0 == strcmp(kite.protocol, "http"));
   assert(0 == strcmp(kite_r.bsalt, "abacab"));
   assert(0 == strcmp(kite_r.fsalt, ""));
+  assert(signature != NULL);
+  assert(0 == strcmp(signature, "sig"));
+  free(signature);
 
   return 1;
 }
@@ -1052,6 +1368,7 @@ int pkproto_test(void)
                                        &callback_called);
   return (pkproto_test_format_frame() &&
           pkproto_test_format_reply() &&
+          pkproto_test_format_chunk() &&
           pkproto_test_format_eof() &&
           pkproto_test_format_pong() &&
           pkproto_test_alloc(PARSER_BYTES_MIN, buffer, p) &&

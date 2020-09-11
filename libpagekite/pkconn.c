@@ -1,7 +1,7 @@
 /******************************************************************************
 pkconn.c - Connection objects
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -46,7 +46,7 @@ void pkc_reset_conn(struct pk_conn* pkc, unsigned int status)
   }
   pkc->status &= ~CONN_STATUS_BITS;
   pkc->status |= status;
-  pkc->activity = time(0);
+  pkc->activity = pk_time();
   pkc->out_buffer_pos = 0;
   pkc->in_buffer_pos = 0;
   pkc->send_window_kb = CONN_WINDOW_SIZE_KB_INITIAL;
@@ -118,6 +118,21 @@ int pkc_listen(struct pk_conn* pkc, struct addrinfo* ai, int backlog)
   return 1;
 }
 
+static void pkc_reset_error_state()
+{
+#ifdef HAVE_OPENSSL
+  unsigned long ssl_errno;
+  char message[257];
+  while (0 != (ssl_errno = ERR_get_error())) {
+    pk_log(PK_LOG_BE_DATA|PK_LOG_TUNNEL_DATA,
+           "Cleared queued SSL ERROR=%ld: %s",
+           ssl_errno, ERR_error_string(ssl_errno, message));
+  }
+  ERR_clear_error();
+#endif
+  errno = 0;
+}
+
 #ifdef HAVE_OPENSSL
 static void pkc_start_handshake(struct pk_conn* pkc, int err)
 {
@@ -145,21 +160,6 @@ static void pkc_end_handshake(struct pk_conn *pkc)
 
   pkc->status &= ~(CONN_STATUS_WANT_WRITE|CONN_STATUS_WANT_READ);
   pkc->state = CONN_SSL_DATA;
-}
-
-static void pkc_reset_error_state()
-{
-#ifdef HAVE_OPENSSL
-  unsigned long ssl_errno;
-  char message[257];
-  while (0 != (ssl_errno = ERR_get_error())) {
-    pk_log(PK_LOG_BE_DATA|PK_LOG_TUNNEL_DATA,
-           "Cleared queued SSL ERROR=%ld: %s",
-           ssl_errno, ERR_error_string(ssl_errno, message));
-  }
-  ERR_clear_error();
-#endif
-  errno = 0;
 }
 
 static void pkc_do_handshake(struct pk_conn *pkc)
@@ -194,6 +194,7 @@ int pkc_start_ssl(struct pk_conn* pkc, SSL_CTX* ctx, const char* hostname)
   long mode;
 
   mode = SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER;
+  mode |= SSL_MODE_AUTO_RETRY;
   mode |= SSL_MODE_ENABLE_PARTIAL_WRITE;
 #ifdef SSL_MODE_RELEASE_BUFFERS
   mode |= SSL_MODE_RELEASE_BUFFERS;
@@ -212,18 +213,22 @@ int pkc_start_ssl(struct pk_conn* pkc, SSL_CTX* ctx, const char* hostname)
       hostname = NULL;
     }
 
+  long sm, sa, sc, sf, st;
+  sm = sa = sc = sf = st = -1;
   if ((NULL == (pkc->ssl = SSL_new(ctx))) ||
-      (mode != SSL_set_mode(pkc->ssl, mode)) ||
-      (1 != SSL_set_app_data(pkc->ssl, pkc)) ||
-      (1 != SSL_set_cipher_list(pkc->ssl, pk_state.ssl_ciphers)) ||
-      (1 != SSL_set_fd(pkc->ssl, PKS(pkc->sockfd))) ||
+      (mode != (mode & (sm = SSL_set_mode(pkc->ssl, mode)))) ||
+      (1 != (sa = SSL_set_app_data(pkc->ssl, pkc))) ||
+      (1 != (sc = SSL_set_cipher_list(pkc->ssl, pk_state.ssl_ciphers))) ||
+      (1 != (sf = SSL_set_fd(pkc->ssl, PKS(pkc->sockfd)))) ||
       /* FIXME: This should be the certificate name we will validate against */
-      (1 != ((hostname == NULL) ? 1 : SSL_set_tlsext_host_name(pkc->ssl, hostname))))
+      (1 != (st = ((hostname == NULL) ? 1 : SSL_set_tlsext_host_name(pkc->ssl, hostname)))))
   {
     if (pkc->ssl != NULL) SSL_free(pkc->ssl);
     pkc->ssl = NULL;
     pk_log(PK_LOG_BE_CONNS | PK_LOG_TUNNEL_CONNS | PK_LOG_ERROR,
-           "%d[pkc_start_ssl]: Failed to prepare SSL object!", pkc->sockfd);
+           "%d[pkc_start_ssl]: Failed to prepare SSL object!"
+           " (ssl=%p, sm=%ld, sa=%ld, sc=%ld, sf=%ld, st=%ld)",
+           pkc->sockfd, pkc->ssl, sm, sa, sc, sf, st);
     return -1;
   }
 
@@ -283,7 +288,7 @@ ssize_t pkc_read(struct pk_conn* pkc)
     }
 
     pkc->in_buffer_pos += bytes;
-    pkc->activity = time(0);
+    pkc->activity = pk_time(0);
 
     /* Update KB counter and window... this is a bit messy. */
     pkc->read_bytes += bytes;

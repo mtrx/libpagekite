@@ -1,7 +1,7 @@
 /******************************************************************************
 pkhooks.h - Callbacks for various internal events
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -24,7 +24,7 @@ typedef enum {
   PK_HOOK_START_BLOCKER   =  2, /* 0, pk_blocker, pk_manager     => (ignored) */
 
   PK_HOOK_LOG             =  6, /* bytes, log_line, NULL         => log? */
-  PK_HOOK_TICK            =  7, /* time(0), pk_manager, NULL     => (ignored) */
+  PK_HOOK_TICK            =  7, /* pk_time(), pk_manager, NULL   => (ignored) */
   PK_HOOK_CHECK_WORLD     =  8, /* 0=begin, pk_blocker, pk_manager => check? */
                                 /* 1=end, pk_blocker, pk_manager => (ignored) */
   PK_HOOK_CHECK_TUNNELS   =  9, /* 0=begin, pk_blocker, pk_manager => check? */
@@ -88,7 +88,8 @@ void pke_init_events             (struct pke_events*, unsigned int);
 void pke_free_event              (struct pke_events*, unsigned int);
 void pke_post_event              (struct pke_events*, unsigned int,
                                   int, const char*);
-int pke_post_blocking_event      (struct pke_events*, unsigned int,
+struct pke_event* pke_post_blocking_event(
+                                  struct pke_events*, unsigned int,
                                   int, const char*, int*, char**);
 struct pke_event* pke_await_event(struct pke_events*, int);
 struct pke_event* pke_get_event  (struct pke_events*, unsigned int);

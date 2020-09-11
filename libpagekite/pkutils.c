@@ -1,7 +1,7 @@
 /******************************************************************************
 pkutils.c - Utility functions for pagekite.
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -37,6 +37,15 @@ char random_junk[32] = {
   0x7a, 0x18, 0x70, 0xe3, 0xe4, 0xe2, 0xae, 0x83,
   0x04, 0x7d, 0xf5, 0xd5, 0xc0, 0x61, 0x0d, 0x00};
 
+/* The CLOCK_MONOTONIC clock_id may be defined but not actually
+ * supported. This flag will be cleared to zero if we find out at
+ * runtime that CLOCK_MONOTONIC is not actually usable.
+ *
+ * Note we also need pthread_condattr_setclock atm.
+ */
+#if defined(HAVE_CLOCK_MONOTONIC) && defined(HAVE_PTHREAD_CONDATTR_SETCLOCK)
+static int use_clock_gettime = 1;
+#endif
 
 void better_srand(int allow_updates)
 {
@@ -104,6 +113,25 @@ int32_t murmur3_32(const uint8_t* key, size_t len) {
   h *= 0xc2b2ae35;
   h ^= h >> 16;
   return h;
+}
+
+int zero_first_eol(int length, char* data)
+{
+  int i;
+  for (i = 0; i < length; i++)
+  {
+    if ((i < length - 1) && (data[i] == '\r') && (data[i+1] == '\n'))
+    {
+      data[i] = data[i+1] = '\0';
+      return i+2;
+    }
+    else if (data[i] == '\n')
+    {
+      data[i] = '\0';
+      return i+1;
+    }
+  }
+  return 0;
 }
 
 int zero_first_crlf(int length, char* data)
@@ -227,7 +255,7 @@ char* collapse_whitespace(char* data)
   while (*r) {
     if (isspace(*r)) {
       *w = ' ';
-      *r++;
+      r++;
       if (!isspace(*r)) w++;
     }
     else {
@@ -280,6 +308,54 @@ void sleep_ms(int ms)
   tv.tv_sec = (ms / 1000);
   tv.tv_usec = 1000 * (ms % 1000);
   select(0, NULL, NULL, NULL, &tv);
+}
+
+void pk_gettime(struct timespec *tp)
+{
+#if defined(HAVE_CLOCK_MONOTONIC) && defined(HAVE_PTHREAD_CONDATTR_SETCLOCK)
+  if (use_clock_gettime) {
+    if (clock_gettime(CLOCK_MONOTONIC, tp) != -1) {
+      tp->tv_sec += 1;  /* The +1 avoids ever returning zero */
+      return;
+    }
+
+    if (errno == EINVAL)
+      use_clock_gettime = 0;
+  }
+#endif
+  {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    tp->tv_sec = tv.tv_sec;
+    tp->tv_nsec = tv.tv_usec * 1000;
+  }
+}
+
+void pk_pthread_condattr_setclock(pthread_condattr_t* cond_attr) {
+#if defined(HAVE_CLOCK_MONOTONIC) && defined(HAVE_PTHREAD_CONDATTR_SETCLOCK)
+  /* Check if the monotonic clock works, if it does, configure the
+   * condition variable attributes to use it. */
+  struct timespec unused_ts;
+  pk_gettime(&unused_ts);
+  if (use_clock_gettime) {
+    pthread_condattr_setclock(cond_attr, CLOCK_MONOTONIC);
+  }
+#endif
+}
+
+time_t pk_time()
+{
+#if defined(HAVE_CLOCK_MONOTONIC) && defined(HAVE_PTHREAD_CONDATTR_SETCLOCK)
+  struct timespec tp;
+  if (use_clock_gettime) {
+    if (clock_gettime(CLOCK_MONOTONIC, &tp) != -1)
+      return (tp.tv_sec + 1); /* The +1 avoids ever returning zero */
+
+    if (errno == EINVAL)
+      use_clock_gettime = 0;
+  }
+#endif
+  return time(0);
 }
 
 int wait_fd(int fd, int timeout_ms)
@@ -457,6 +533,7 @@ int http_get(const char* url, char* result_buffer, size_t maxlen)
 
   total_bytes = 0;
   memset(&hints, 0, sizeof(struct addrinfo));
+  hints.ai_flags = AI_ADDRCONFIG;
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   if (0 == getaddrinfo(hostname, port, &hints, &result)) {
@@ -471,7 +548,7 @@ int http_get(const char* url, char* result_buffer, size_t maxlen)
         total_bytes = 0;
         bp = result_buffer;
         do {
-          bytes = timed_read(sockfd, bp, maxlen-(1+total_bytes), 1000);
+          bytes = timed_read(sockfd, bp, maxlen-(1+total_bytes), 5000);
           if (bytes > 0) {
             bp += bytes;
             total_bytes += bytes;
@@ -679,6 +756,12 @@ int utils_test(void)
 
   assert(length == 6);
   assert((buffer1[4] == '\0') && (buffer1[5] == '\0') && (buffer1[6] == '\r'));
+  assert(strcmp(buffer1, "abcd") == 0);
+
+  strcpy(buffer1, "abcd\n\ndefghijklmnop");
+  length = zero_first_eol(strlen(buffer1), buffer1);
+  assert(length == 5);
+  assert((buffer1[4] == '\0') && (buffer1[5] == '\n'));
   assert(strcmp(buffer1, "abcd") == 0);
 
   strcpy(buffer1, "abcd\r\nfoo\r\n\r\ndef");

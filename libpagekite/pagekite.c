@@ -3,7 +3,7 @@ pagekite.c - High level library interface
 
 *******************************************************************************
 
-This file is Copyright 2012-2017, The Beanstalks Project ehf.
+This file is Copyright 2012-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -88,6 +88,8 @@ pagekite_mgr pagekite_init(
 #ifdef HAVE_IPV6
   pk_state.use_ipv6 = (0 != (flags & PK_WITH_IPV6));
 #endif
+  pk_state.ddns_request_public_ipv4 = (0 != (flags & PK_WITH_IPV4_DNS));
+  pk_state.ddns_request_public_ipv6 = (0 != (flags & PK_WITH_IPV6_DNS));
 
   if (flags & PK_WITH_SSL) {
     PKS_SSL_INIT(ssl_ctx);
@@ -343,7 +345,9 @@ int pagekite_add_service_frontends(pagekite_mgr pkm, int flags) {
 
 int pagekite_free(pagekite_mgr pkm) {
   if (pkm == NULL) return -1;
+#ifdef HAVE_OPENSSL
   if (PK_MANAGER(pkm)->ssl_ctx != NULL) SSL_CTX_free(PK_MANAGER(pkm)->ssl_ctx);
+#endif
   pkm_manager_free(PK_MANAGER(pkm));
   pks_free_ssl_cert_names();
 #ifdef _MSC_VER
@@ -393,6 +397,20 @@ int pagekite_set_housekeeping_max_interval(pagekite_mgr pkm, int seconds)
   return 0;
 }
 
+int pagekite_set_rejection_url(pagekite_mgr pkm, const char* url)
+{
+  if (pkm == NULL) return -1;
+  if (PK_MANAGER(pkm)->fancy_pagekite_net_rejection_url != PK_REJECT_FANCY_URL)
+    free(PK_MANAGER(pkm)->fancy_pagekite_net_rejection_url);
+  if (url == NULL) {
+    PK_MANAGER(pkm)->fancy_pagekite_net_rejection_url = PK_REJECT_FANCY_URL;
+  }
+  else {
+    PK_MANAGER(pkm)->fancy_pagekite_net_rejection_url = strdup(url);
+  }
+  return 0;
+}
+
 int pagekite_enable_watchdog(pagekite_mgr pkm, int enable)
 {
   if (pkm == NULL) return -1;
@@ -431,6 +449,8 @@ int pagekite_set_conn_eviction_idle_s(pagekite_mgr pkm, int seconds)
 int pagekite_set_openssl_ciphers(pagekite_mgr pkm, const char* ciphers)
 {
   (void) pkm;
+  if(pk_state.ssl_ciphers != NULL && pk_state.ssl_ciphers != PKS_DEFAULT_CIPHERS)
+    free(pk_state.ssl_ciphers);
   pk_state.ssl_ciphers = strdup(ciphers);
   return 0;
 }

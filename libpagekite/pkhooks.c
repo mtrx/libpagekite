@@ -1,7 +1,7 @@
 /******************************************************************************
 pkhooks.c - Callbacks for various internal events
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -19,6 +19,8 @@ Note: For alternate license terms, see the file COPYING.md.
 *******************************************************************************
 
 HOW IT WORKS:
+
+See also: doc/Event_API.md
 
 We use a queue of events as a coordination point between threads, so
 consumers of the API don't need to understand our internal threading and so
@@ -65,7 +67,16 @@ outward facing public API methods described above are defined in pagekite.c.
 #include "pagekite.h"
 
 #include "pkcommon.h"
+#include "pkutils.h"
+#include "pkerror.h"
+#include "pkconn.h"
+#include "pkstate.h"
 #include "pkhooks.h"
+#include "pkutils.h"
+#include "pkproto.h"
+#include "pkblocker.h"
+#include "pkmanager.h"
+#include "pklogging.h"
 
 #define _EV(pke, event_code) \
   (pke->events + ((event_code & PK_EV_SLOT_MASK) >> PK_EV_SLOT_SHIFT))
@@ -75,10 +86,18 @@ struct pke_events* _pke_default_pke = NULL;
 
 void pke_init_events(struct pke_events* pke, unsigned int threads) {
   unsigned int bytes = 0;
+  static pthread_condattr_t shared_condattr;
   pke->event_mask = PK_EV_NONE;
   pke->event_ptr = 0;
   pke->event_max = threads * 12;
   if (pke->event_max > PK_EV_SLOTS_MAX) pke->event_max = PK_EV_SLOTS_MAX;
+
+  PK_TRACE_FUNCTION;
+
+  /* Make sure our condition variables are configured to use the same
+   * clock as pk_gettime(). */
+  pthread_condattr_init(&shared_condattr);
+  pk_pthread_condattr_setclock(&shared_condattr);
 
   bytes = sizeof(struct pke_event) * pke->event_max;
   pke->events = malloc(bytes);
@@ -86,20 +105,22 @@ void pke_init_events(struct pke_events* pke, unsigned int threads) {
 
   for (int i = 0; i < pke->event_max; i++) {
     pke->events[i].event_code = (i << PK_EV_SLOT_SHIFT);
-    pthread_cond_init(&(pke->events[i].trigger), NULL);
+    pthread_cond_init(&(pke->events[i].trigger), &shared_condattr);
   }
 
   /* Event 0 is reserved for the NONE event. */
   pke->events[0].event_code = PK_EV_NONE;
 
   pthread_mutex_init(&(pke->lock), NULL);
-  pthread_cond_init(&(pke->trigger), NULL);
+  pthread_cond_init(&(pke->trigger), &shared_condattr);
 
-  if (_pke_default_pke == NULL)_pke_default_pke = pke;
+  _pke_default_pke = pke;
 }
 
-int _pke_unlocked_free_event(struct pke_events* pke, unsigned int event_code)
+void _pke_unlocked_free_event(struct pke_events* pke, unsigned int event_code)
 {
+  PK_TRACE_FUNCTION;
+
   struct pke_event* ev = _EV(pke, event_code);
   ev->event_code &= PK_EV_SLOT_MASK;
   if (ev->event_str != NULL) free(ev->event_str);
@@ -114,6 +135,8 @@ int _pke_unlocked_free_event(struct pke_events* pke, unsigned int event_code)
 struct pke_event* _pke_get_oldest_event(struct pke_events* pke,
                                         int nonzero, int excl_id)
 {
+  PK_TRACE_FUNCTION;
+
   struct pke_event* oldest = NULL;
   struct pke_event* ev = &(pke->events[1]);
   for (int i = 1; i < pke->event_max; i++, ev++) {
@@ -133,15 +156,17 @@ struct pke_event* _pke_unlocked_post_event(
   int event_type, int event_int, const char* event_str,
   int* response_int, char** response_str)
 {
+  PK_TRACE_FUNCTION;
+
   if ((pke->event_mask != PK_EV_ALL) &&
       (0 == (event_type & pke->event_mask))) return NULL;
 
   struct pke_event* ev = _pke_get_oldest_event(
     pke, 0, PK_EV_IS_BLOCKING | PK_EV_PROCESSING);
-  if (ev == NULL) ev = &(pke->events[1]); 
+  if (ev == NULL) ev = &(pke->events[1]);
 
   ev->event_code = (ev->event_code & PK_EV_SLOT_MASK) | event_type;
-  ev->posted = time(0);
+  ev->posted = pk_time();
   if (ev->event_str != NULL) free(ev->event_str);
   if (event_str != NULL) {
     ev->event_str = strdup(event_str);
@@ -158,6 +183,8 @@ struct pke_event* _pke_unlocked_post_event(
 
 void pke_free_event(struct pke_events* pke, unsigned int event_code)
 {
+  PK_TRACE_FUNCTION;
+
   pke = (pke != NULL) ? pke : _pke_default_pke;
   if (pke == NULL) return;
 
@@ -173,6 +200,8 @@ void pke_post_event(
   struct pke_events* pke,
   unsigned int event_type, int event_int, const char* event_str)
 {
+  PK_TRACE_FUNCTION;
+
   pke = (pke != NULL) ? pke : _pke_default_pke;
   if (pke == NULL) return;
 
@@ -201,18 +230,21 @@ void pke_post_event(
  * string. It is the caller's responsibility to free the memory when the
  * data has been processed.
  */
-int pke_post_blocking_event(
+struct pke_event* pke_post_blocking_event(
   struct pke_events* pke,
   unsigned int event_type, int event_int, const char* event_str,
   int* response_int, char** response_str)
 {
-  pke = (pke != NULL) ? pke : _pke_default_pke;
-  if (pke == NULL) return PK_EV_RESPOND_DEFAULT;
+  PK_TRACE_FUNCTION;
 
   if (response_int != NULL) *response_int = 0;
   if (response_str != NULL) *response_str = NULL;
+
+  pke = (pke != NULL) ? pke : _pke_default_pke;
+  if (pke == NULL) return PK_EV_RESPOND_DEFAULT;
+
   if ((pke->event_mask != PK_EV_ALL) &&
-      (0 == (event_type & pke->event_mask))) return PK_EV_RESPOND_DEFAULT;
+      (0 == (event_type & pke->event_mask))) return NULL;
 
   pthread_mutex_lock(&(pke->lock));
 
@@ -230,20 +262,19 @@ int pke_post_blocking_event(
   pthread_cond_wait(&(ev->trigger), &(pke->lock));
   pthread_mutex_unlock(&(pke->lock));
 
-  return ev->response_code;
+  return ev;
 }
 
 struct pke_event* pke_await_event(struct pke_events* pke, int timeout)
 {
+  PK_TRACE_FUNCTION;
+
   pke = (pke != NULL) ? pke : _pke_default_pke;
   struct pke_event* oldest = NULL;
 
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-
   struct timespec deadline;
-  deadline.tv_sec = tv.tv_sec + timeout;
-  deadline.tv_nsec = tv.tv_usec * 1000;
+  pk_gettime(&deadline);
+  deadline.tv_sec += timeout;
 
   do {
     /* Search for an event... */
@@ -259,7 +290,8 @@ struct pke_event* pke_await_event(struct pke_events* pke, int timeout)
 
     /* No event found, block ourselves until someone posts one */
     pthread_mutex_lock(&(pke->lock));
-    if (0 != pthread_cond_timedwait(&(pke->trigger), &(pke->lock), &deadline)) {
+    while (0 != pthread_cond_timedwait(&(pke->trigger), &(pke->lock),
+                                       &deadline)) {
       pthread_mutex_unlock(&(pke->lock));
       return &(pke->events[0]);
     }
@@ -276,6 +308,8 @@ struct pke_event* pke_get_event(struct pke_events* pke, unsigned int event_code)
 void pke_post_response(struct pke_events* pke, unsigned int event_code,
                        unsigned int rcode,
                        int response_int, const char* response_str) {
+  PK_TRACE_FUNCTION;
+
   pke = (pke != NULL) ? pke : _pke_default_pke;
 
   struct pke_event* ev = _EV(pke, event_code);
@@ -311,6 +345,8 @@ void pke_post_response(struct pke_events* pke, unsigned int event_code,
 }
 
 void pke_cancel_all_events(struct pke_events* pke) {
+  PK_TRACE_FUNCTION;
+
   pke = (pke != NULL) ? pke : _pke_default_pke;
 
   struct pke_event* ev = &(pke->events[1]);
@@ -329,6 +365,7 @@ void pke_cancel_all_events(struct pke_events* pke) {
 
 void* pke_event_test_poster(void* void_pke) {
   struct pke_events* pke = (struct pke_events*) void_pke;
+  struct pke_event* ev;
   int r_int;
   char* r_str;
 
@@ -337,12 +374,13 @@ void* pke_event_test_poster(void* void_pke) {
   pke_post_event(NULL, 678, 0, NULL); fprintf(stderr, "."); sleep(1);
   pke_post_event(NULL, 901, 0, NULL); fprintf(stderr, "."); sleep(1);
 
-  assert(76 == pke_post_blocking_event(pke, 255, 9, "hello", &r_int, &r_str));
+  ev = pke_post_blocking_event(pke, 255, 9, "hello", &r_int, &r_str);
+  assert(76 == ev->response_code);
   assert(r_int == 9);
   assert(r_str != NULL);
   assert(strcasecmp(r_str, "hello") == 0);
   free(r_str);
-  pke_free_event(pke, 255);
+  pke_free_event(pke, ev->event_code);
 
   return void_pke;
 }

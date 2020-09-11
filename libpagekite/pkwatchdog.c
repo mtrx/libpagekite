@@ -1,7 +1,7 @@
 /******************************************************************************
 pkwatchdog.c - Watchdog thread that just dumps core if ignored.
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -39,7 +39,7 @@ time_t pk_global_watchdog_ticker = 0;
 void pkw_pet_watchdog()
 {
    if (pk_global_watchdog_ticker >= 0)
-     pk_global_watchdog_ticker = time(0);
+     pk_global_watchdog_ticker = pk_time();
 }
 
 void* pkw_run_watchdog(void *void_pkm)

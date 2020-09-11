@@ -1,7 +1,7 @@
 /******************************************************************************
 pkerror.h - Basic error handling utilities
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -27,6 +27,9 @@ Note: For alternate license terms, see the file COPYING.md.
 #define ERR_PARSE_NO_KITENAME -20000
 #define ERR_PARSE_NO_BSALT    -20001
 #define ERR_PARSE_NO_FSALT    -20002
+#define ERR_PARSE_UNSIGNED    -20003
+#define ERR_PARSE_BAD_SIG     -20004
+#define ERR_PARSE_BAD_FSALT   -20005
 
 #define ERR_CONNECT_LOOKUP    -30000
 #define ERR_CONNECT_CONNECT   -30001
@@ -44,6 +47,7 @@ Note: For alternate license terms, see the file COPYING.md.
 #define ERR_NO_FRONTENDS      -50002
 #define ERR_NO_KITE           -50003
 #define ERR_RAW_NEEDS_PUBPORT -50004
+#define ERR_NO_IPVX           -50005
 
 #define ERR_TOOBIG_MANAGER    -60000
 #define ERR_TOOBIG_KITES      -60001

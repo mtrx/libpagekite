@@ -1,7 +1,7 @@
 /******************************************************************************
 pklogging.c - Logging.
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -55,16 +55,25 @@ int pk_log(int level, const char* fmt, ...)
 #else
     struct timeval t;
     char tsbuf[30];
+# ifdef HAVE_DS_LOG_FORMAT
     gettimeofday(&t, NULL);
     strftime(tsbuf, sizeof(tsbuf), "%Y-%m-%d %H:%M:%S", localtime(&t.tv_sec));
-# ifdef HAVE_DS_LOG_FORMAT
     len = snprintf(output, 4000, "[%s.%03d][%x] ",
                            tsbuf, (int)t.tv_usec / 1000, (int) pthread_self());
 # else
-    len = sprintf(output, "t=%s.%03d; ts=%x; tid=%x; ll=%x; msg=",
-                          tsbuf, (int)t.tv_usec / 1000,
-                          (int) time(0), (int) pthread_self(),
-                          logged_lines++);
+    if (log_file != NULL) {
+      gettimeofday(&t, NULL);
+      strftime(tsbuf, sizeof(tsbuf), "%Y-%m-%d %H:%M:%S", localtime(&t.tv_sec));
+      len = sprintf(output, "t=%s.%03d; ts=%x; tid=%x; ll=%x; msg=",
+                            tsbuf, (int)t.tv_usec / 1000,
+                            (int) time(0), (int) pthread_self(),
+                            logged_lines++);
+    }
+    else {
+      /* For syslog, we omit the times, syslog handles that. */
+      len = sprintf(output, "tid=%x; ll=%x; msg=",
+                            (int) pthread_self(), logged_lines++);
+    }
 # endif
 #endif
     va_start(args, fmt);
@@ -72,7 +81,7 @@ int pk_log(int level, const char* fmt, ...)
     va_end(args);
 
     if ((r > 0) && PK_HOOK(PK_HOOK_LOG, len, output, NULL)) {
-      pke_post_event(NULL, PK_EV_LOGGING, len, output);
+      if (!(level & PK_LOG_TRACE)) pke_post_event(NULL, PK_EV_LOGGING, len, output);
       pks_logcopy(output, len);
       log_file = pk_state.log_file; /* Avoid race conditions if it changes. */
       if (log_file != NULL) {
@@ -201,7 +210,7 @@ void pk_dump_conn(char* prefix, struct pk_conn* conn)
   pk_log(PK_LOG_MANAGER_DEBUG, "%s/sockfd: %d", prefix, conn->sockfd);
   pk_log(PK_LOG_MANAGER_DEBUG, "%s/activity: %x (%ds ago)", prefix,
                                conn->activity,
-                               time(0) - conn->activity);
+                               pk_time(0) - conn->activity);
   pk_log(PK_LOG_MANAGER_DEBUG, "%s/read_bytes: %d", prefix, conn->read_bytes);
   pk_log(PK_LOG_MANAGER_DEBUG, "%s/read_kb: %d", prefix, conn->read_kb);
   pk_log(PK_LOG_MANAGER_DEBUG, "%s/sent_kb: %d", prefix, conn->sent_kb);
@@ -275,7 +284,7 @@ void pk_dump_state(struct pk_manager* pkm)
   pk_log(LL, "pk_manager/last_world_update: %x", pkm->last_world_update);
   pk_log(LL, "pk_manager/next_tick: %d", pkm->next_tick);
   pk_log(LL, "pk_manager/enable_timer: %d", 0 < pkm->enable_timer);
-  pk_log(LL, "pk_manager/fancy_pagekite_net_rejection: %d", 0 < pkm->fancy_pagekite_net_rejection);
+  pk_log(LL, "pk_manager/fancy_pagekite_net_rejection_url: %s", pkm->fancy_pagekite_net_rejection_url);
   pk_log(LL, "pk_manager/want_spare_frontends: %d", pkm->want_spare_frontends);
   pk_log(LL, "pk_manager/dynamic_dns_url: %s", pkm->dynamic_dns_url);
 

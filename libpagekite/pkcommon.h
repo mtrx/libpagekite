@@ -85,6 +85,7 @@
 #  define SHUT_RDWR 2
 typedef SSIZE_T ssize_t;
 #endif
+#include <ctype.h>
 
 #ifndef ANDROID
 typedef signed char               int8_t;
@@ -143,6 +144,7 @@ typedef unsigned int              uint32_t;
 #    define SSL_OP_NO_COMPRESSION 0
 #  endif
 #  define PKS_DEFAULT_CIPHERS "HIGH:!aNULL:!eNULL:!LOW:!MD5:!EXP:!PSK:!SRP:!DSS"
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
 #  define PKS_SSL_INIT(ctx) {\
               SSL_load_error_strings(); \
               ERR_load_BIO_strings(); \
@@ -152,6 +154,13 @@ typedef unsigned int              uint32_t;
               ctx = SSL_CTX_new(SSLv23_method()); \
               SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_COMPRESSION); \
               SSL_CTX_set_mode(ctx, SSL_MODE_RELEASE_BUFFERS); }
+#else
+#  define PKS_SSL_INIT(ctx) {\
+              sk_SSL_COMP_zero(SSL_COMP_get_compression_methods()); \
+              ctx = SSL_CTX_new(TLS_method()); \
+              SSL_CTX_set_options(ctx, SSL_OP_NO_COMPRESSION); \
+              SSL_CTX_set_mode(ctx, SSL_MODE_RELEASE_BUFFERS); }
+#endif
 #else
 #  define SSL_CTX                   void
 #  define PKS_DEFAULT_CIPHERS       NULL
@@ -168,8 +177,8 @@ typedef struct {
 } pk_rlock_t;
 
 #define PARSER_BYTES_MIN   1 * 1024
-#define PARSER_BYTES_AVG   2 * 1024
-#define PARSER_BYTES_MAX   4 * 1024  /* <= CONN_IO_BUFFER_SIZE */
+#define PARSER_BYTES_AVG   4 * 1024
+#define PARSER_BYTES_MAX  16 * 1024  /* <= CONN_IO_BUFFER_SIZE */
 
 #ifndef HAVE_RELAY
 #define HAVE_RELAY 0

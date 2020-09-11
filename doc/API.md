@@ -13,6 +13,7 @@
       * [`pagekite_set_log_destination                `](#pgktstlgdstntn)
       * [`pagekite_set_housekeeping_min_interval      `](#pgktsthskpngmnntrvl)
       * [`pagekite_set_housekeeping_max_interval      `](#pgktsthskpngmxntrvl)
+      * [`pagekite_set_rejection_url                  `](#pgktstrjctnrl)
       * [`pagekite_enable_http_forwarding_headers     `](#pgktnblhttpfrwrdnghdrs)
       * [`pagekite_enable_fake_ping                   `](#pgktnblfkpng)
       * [`pagekite_enable_watchdog                    `](#pgktnblwtchdg)
@@ -337,6 +338,26 @@ This function can be called at any time.
 **Returns**: The new maximum housekeeping interval.
 
 
+<a                                                name="pgktstrjctnrl"><hr></a>
+
+#### `int pagekite_set_rejection_url(...)`
+
+Configure the rejection URL.
+
+See the destination URL included in the IFRAME for incoming requests
+that cannot be handled (e.g. because the origin web server is
+down or things are misconfigured).
+
+This function can be called at any time.
+
+**Arguments**:
+
+   * `pagekite_mgr`: A reference to the PageKite manager object
+   * `const char* url`: The new URL
+
+**Returns**: 0
+
+
 <a                                       name="pgktnblhttpfrwrdnghdrs"><hr></a>
 
 #### `int pagekite_enable_http_forwarding_headers(...)`
@@ -568,6 +589,8 @@ posting of API events. This can be called at any time, but if
 events outside the mask have already been posted (but not handled)
 they will not be not function.
 
+See also: doc/Event_API.md
+
 **Arguments**:
 
    * `pagekite_mgr`: A reference to the PageKite manager object
@@ -584,6 +607,8 @@ Wait for a libpagekite event.
 
 This function blocks until one of the libpagekite worker threads
 posts an API event.
+
+See also: doc/Event_API.md
 
 **Arguments**:
 
@@ -602,6 +627,8 @@ Get event data (integer).
 This function returns the integer data associated with a given
 API event.
 
+See also: doc/Event_API.md
+
 **Arguments**:
 
    * `pagekite_mgr`: A reference to the PageKite manager object
@@ -619,6 +646,8 @@ Get event data (string).
 This function returns a pointer to the data associated with a
 given API event.
 
+See also: doc/Event_API.md
+
 **Arguments**:
 
    * `pagekite_mgr`: A reference to the PageKite manager object
@@ -634,6 +663,8 @@ given API event.
 Respond to a pagekite event.
 
 Post a response to an API event.
+
+ See also: doc/Event_API.md
 
 **Arguments**:
 
@@ -651,6 +682,8 @@ Post a response to an API event.
 Respond to a pagekite event.
 
 Post a response (with data) to an API event.
+
+ See also: doc/Event_API.md
 
 **Arguments**:
 
@@ -793,7 +826,7 @@ Log an error and reset the internal error state.
 
 ## Constants
 
-PK_VERSION = "0.91.171102C"  
+PK_VERSION = "0.91.200718C"  
 PK_STATUS_STARTUP = 10  
 PK_STATUS_CONNECTING = 20  
 PK_STATUS_UPDATING_DNS = 30  
@@ -813,6 +846,8 @@ PK_WITH_FRONTEND_SNI = 0x0040
 PK_WITH_SRAND_RESEED = 0x0080  
 PK_AS_FRONTEND_RELAY = 0x0100  
 PK_WITH_SYSLOG = 0x0200  
+PK_WITH_IPV4_DNS = 0x0400  
+PK_WITH_IPV6_DNS = 0x0800  
 PK_LOG_TUNNEL_DATA = 0x000100  
 PK_LOG_TUNNEL_HEADERS = 0x000200  
 PK_LOG_TUNNEL_CONNS = 0x000400  
@@ -852,6 +887,8 @@ PK_EV_NONE = 0x00000000
 PK_EV_SHUTDOWN = (0x00000001 | PK_EV_MASK_ALL)  
 PK_EV_LOGGING = (0x00000002 | PK_EV_MASK_LOGGING)  
 PK_EV_COUNTER = (0x00000003 | PK_EV_MASK_STATS)  
+PK_EV_CFG_FANCY_URL = (0x00000004 | PK_EV_MASK_MISC)  
+PK_EV_TUNNEL_REQUEST = (0x00000005 | PK_EV_MASK_MISC)  
 PK_EV_RESPOND_DEFAULT = 0x00000000  
 PK_EV_RESPOND_TRUE = 0x000000ff  
 PK_EV_RESPOND_OK = 0x00000001  

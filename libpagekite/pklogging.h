@@ -1,7 +1,7 @@
 /******************************************************************************
 utils.h - Logging.
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -26,7 +26,7 @@ Note: For alternate license terms, see the file COPYING.md.
 #define PK_TRACE_LOOP(msg)
 #endif
 
-FILE* PK_DISABLE_LOGGING;
+extern FILE* PK_DISABLE_LOGGING;
 
 int pk_log(int, const char *fmt, ...);
 int pk_log_chunk(struct pk_tunnel*, struct pk_chunk*);

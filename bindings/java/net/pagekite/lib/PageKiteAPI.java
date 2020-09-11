@@ -4,7 +4,7 @@
       * * *   WARNING: This file is auto-generated, do not edit!  * * *
 
 *******************************************************************************
-This file is Copyright 2012-2017, The Beanstalks Project ehf.
+This file is Copyright 2012-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -24,7 +24,7 @@ package net.pagekite.lib;
 
 public class PageKiteAPI extends Object
 {
-    public static final String PK_VERSION = "0.91.171102C";
+    public static final String PK_VERSION = "0.91.200718C";
     public static final int PK_STATUS_STARTUP = 10;
     public static final int PK_STATUS_CONNECTING = 20;
     public static final int PK_STATUS_UPDATING_DNS = 30;
@@ -44,6 +44,8 @@ public class PageKiteAPI extends Object
     public static final int PK_WITH_SRAND_RESEED = 0x0080;
     public static final int PK_AS_FRONTEND_RELAY = 0x0100;
     public static final int PK_WITH_SYSLOG = 0x0200;
+    public static final int PK_WITH_IPV4_DNS = 0x0400;
+    public static final int PK_WITH_IPV6_DNS = 0x0800;
     public static final int PK_LOG_TUNNEL_DATA = 0x000100;
     public static final int PK_LOG_TUNNEL_HEADERS = 0x000200;
     public static final int PK_LOG_TUNNEL_CONNS = 0x000400;
@@ -83,6 +85,8 @@ public class PageKiteAPI extends Object
     public static final int PK_EV_SHUTDOWN = (0x00000001 | PK_EV_MASK_ALL);
     public static final int PK_EV_LOGGING = (0x00000002 | PK_EV_MASK_LOGGING);
     public static final int PK_EV_COUNTER = (0x00000003 | PK_EV_MASK_STATS);
+    public static final int PK_EV_CFG_FANCY_URL = (0x00000004 | PK_EV_MASK_MISC);
+    public static final int PK_EV_TUNNEL_REQUEST = (0x00000005 | PK_EV_MASK_MISC);
     public static final int PK_EV_RESPOND_DEFAULT = 0x00000000;
     public static final int PK_EV_RESPOND_TRUE = 0x000000ff;
     public static final int PK_EV_RESPOND_OK = 0x00000001;
@@ -103,6 +107,7 @@ public class PageKiteAPI extends Object
     public static native int setLogDestination(int log_destination);
     public static native int setHousekeepingMinInterval(int interval);
     public static native int setHousekeepingMaxInterval(int interval);
+    public static native int setRejectionUrl(String url);
     public static native int enableHttpForwardingHeaders(int enable);
     public static native int enableFakePing(int enable);
     public static native int enableWatchdog(int enable);

@@ -4,7 +4,7 @@
 #       * * *   WARNING: This file is auto-generated, do not edit!  * * *
 # 
 ###############################################################################
-# This file is Copyright 2012-2017, The Beanstalks Project ehf.
+# This file is Copyright 2012-2020, The Beanstalks Project ehf.
 # 
 # This program is free software: you can redistribute it and/or modify it under
 # the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -22,7 +22,7 @@
 from ctypes import cdll, c_void_p, c_char_p, c_int
 
 
-PK_VERSION = "0.91.171102C"
+PK_VERSION = "0.91.200718C"
 PK_STATUS_STARTUP = 10
 PK_STATUS_CONNECTING = 20
 PK_STATUS_UPDATING_DNS = 30
@@ -42,6 +42,8 @@ PK_WITH_FRONTEND_SNI = 0x0040
 PK_WITH_SRAND_RESEED = 0x0080
 PK_AS_FRONTEND_RELAY = 0x0100
 PK_WITH_SYSLOG = 0x0200
+PK_WITH_IPV4_DNS = 0x0400
+PK_WITH_IPV6_DNS = 0x0800
 PK_LOG_TUNNEL_DATA = 0x000100
 PK_LOG_TUNNEL_HEADERS = 0x000200
 PK_LOG_TUNNEL_CONNS = 0x000400
@@ -81,6 +83,8 @@ PK_EV_NONE = 0x00000000
 PK_EV_SHUTDOWN = (0x00000001 | PK_EV_MASK_ALL)
 PK_EV_LOGGING = (0x00000002 | PK_EV_MASK_LOGGING)
 PK_EV_COUNTER = (0x00000003 | PK_EV_MASK_STATS)
+PK_EV_CFG_FANCY_URL = (0x00000004 | PK_EV_MASK_MISC)
+PK_EV_TUNNEL_REQUEST = (0x00000005 | PK_EV_MASK_MISC)
 PK_EV_RESPOND_DEFAULT = 0x00000000
 PK_EV_RESPOND_TRUE = 0x000000ff
 PK_EV_RESPOND_OK = 0x00000001
@@ -106,6 +110,7 @@ def get_libpagekite_cdll():
             (c_int, "set_log_destination", (c_void_p, c_int,)),
             (c_int, "set_housekeeping_min_interval", (c_void_p, c_int,)),
             (c_int, "set_housekeeping_max_interval", (c_void_p, c_int,)),
+            (c_int, "set_rejection_url", (c_void_p, c_char_p,)),
             (c_int, "enable_http_forwarding_headers", (c_void_p, c_int,)),
             (c_int, "enable_fake_ping", (c_void_p, c_int,)),
             (c_int, "enable_watchdog", (c_void_p, c_int,)),
@@ -454,6 +459,25 @@ class PageKite(object):
         assert(self.pkm is not None)
         return self.dll.pagekite_set_housekeeping_max_interval(self.pkm, c_int(interval))
 
+    def set_rejection_url(self, url):
+        """
+        Configure the rejection URL.
+        
+        See the destination URL included in the IFRAME for incoming
+        requests that cannot be handled (e.g. because the origin
+        web server is down or things are misconfigured).
+        
+        This function can be called at any time.
+    
+        Args:
+           * `const char* url`: The new URL
+    
+        Returns:
+            0
+        """
+        assert(self.pkm is not None)
+        return self.dll.pagekite_set_rejection_url(self.pkm, c_char_p(url.encode("utf-8")))
+
     def enable_http_forwarding_headers(self, enable):
         """
         Enable or disable HTTP forwarding headers.
@@ -672,6 +696,8 @@ class PageKite(object):
         disable posting of API events. This can be called at any
         time, but if events outside the mask have already been
         posted (but not handled) they will not be not function.
+        
+        See also: doc/Event_API.md
     
         Args:
            * `unsigned int mask`: A bitmask describing which events we want
@@ -688,6 +714,8 @@ class PageKite(object):
         
         This function blocks until one of the libpagekite worker
         threads posts an API event.
+        
+        See also: doc/Event_API.md
     
         Args:
            * `int timeout`: Max seconds to wait for an event
@@ -704,6 +732,8 @@ class PageKite(object):
         
         This function returns the integer data associated with
         a given API event.
+        
+        See also: doc/Event_API.md
     
         Args:
            * `unsigned int event_code`: The code identifying the event
@@ -720,6 +750,8 @@ class PageKite(object):
         
         This function returns a pointer to the data associated
         with a given API event.
+        
+        See also: doc/Event_API.md
     
         Args:
            * `unsigned int event_code`: The code identifying the event
@@ -735,6 +767,8 @@ class PageKite(object):
         Respond to a pagekite event.
         
         Post a response to an API event.
+        
+         See also: doc/Event_API.md
     
         Args:
            * `unsigned int event_code`: The event code
@@ -751,6 +785,8 @@ class PageKite(object):
         Respond to a pagekite event.
         
         Post a response (with data) to an API event.
+        
+         See also: doc/Event_API.md
     
         Args:
            * `unsigned int event_code`: The event code

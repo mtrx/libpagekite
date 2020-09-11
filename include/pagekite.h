@@ -3,7 +3,7 @@ pagekite.h - The public library interface of libpagekite
 
 *******************************************************************************
 
-This file is Copyright 2012-2016, The Beanstalks Project ehf.
+This file is Copyright 2012-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -31,12 +31,12 @@ WARNING: This file is processed automatically to generate the JNI and API
 
 /* Constants: Libpagekite version */
 #ifdef ANDROID
-#define PK_VERSION "0.91.171102A" /* Note: Update frontend DNS on changes! */
+#define PK_VERSION "0.91.200718A" /* Note: Update frontend DNS on changes! */
 #else
 #ifdef _MSC_VER
-#define PK_VERSION "0.91.171102W"
+#define PK_VERSION "0.91.200718W"
 #else
-#define PK_VERSION "0.91.171102C"
+#define PK_VERSION "0.91.200718C"
 #endif
 #endif
 
@@ -62,6 +62,8 @@ WARNING: This file is processed automatically to generate the JNI and API
 #define PK_WITH_SRAND_RESEED         0x0080
 #define PK_AS_FRONTEND_RELAY         0x0100
 #define PK_WITH_SYSLOG               0x0200
+#define PK_WITH_IPV4_DNS             0x0400
+#define PK_WITH_IPV6_DNS             0x0800
 
 /* Constants: PageKite logging constants */
 #define PK_LOG_TUNNEL_DATA     0x000100
@@ -109,6 +111,8 @@ WARNING: This file is processed automatically to generate the JNI and API
 #define PK_EV_SHUTDOWN        (0x00000001 | PK_EV_MASK_ALL)
 #define PK_EV_LOGGING         (0x00000002 | PK_EV_MASK_LOGGING)
 #define PK_EV_COUNTER         (0x00000003 | PK_EV_MASK_STATS)
+#define PK_EV_CFG_FANCY_URL   (0x00000004 | PK_EV_MASK_MISC)
+#define PK_EV_TUNNEL_REQUEST  (0x00000005 | PK_EV_MASK_MISC)
 
 #define PK_EV_RESPOND_DEFAULT  0x00000000
 #define PK_EV_RESPOND_TRUE     0x000000ff
@@ -399,6 +403,24 @@ DECLSPEC_DLL int pagekite_set_housekeeping_max_interval(
 );
 
 
+/* Initialization: Configure the rejection URL.
+ *
+ *    See the destination URL included in the IFRAME for incoming requests
+ *    that cannot be handled (e.g. because the origin web server is down
+ *    or things are misconfigured).
+ *
+ *    This function can be called at any time.
+ *
+ * Returns: 0
+ */
+DECLSPEC_DLL int pagekite_set_rejection_url(
+  pagekite_mgr,         /* A reference to the PageKite manager object */
+  const char* url       /* The new URL */
+);
+
+
+
+
 /* Initialization: Enable or disable HTTP forwarding headers.
  *
  *    When enabled, libpagekite will rewrite incoming HTTP headers
@@ -583,6 +605,8 @@ DECLSPEC_DLL int pagekite_free(
  *    the mask have already been posted (but not handled) they will not be
  *    not function.
  *
+ *    See also: doc/Event_API.md
+ *
  * Returns: Always returns 0.
  */
 DECLSPEC_DLL int pagekite_set_event_mask(
@@ -595,6 +619,8 @@ DECLSPEC_DLL int pagekite_set_event_mask(
  *
  *    This function blocks until one of the libpagekite worker threads
  *    posts an API event.
+ *
+ *    See also: doc/Event_API.md
  *
  * Returns: An integer code identifying the event.
  */
@@ -609,6 +635,8 @@ DECLSPEC_DLL unsigned int pagekite_await_event(
  *    This function returns the integer data associated with a given API
  *    event.
  *
+ *    See also: doc/Event_API.md
+ *
  * Returns: An integer.
  */
 DECLSPEC_DLL int pagekite_get_event_int(
@@ -622,6 +650,8 @@ DECLSPEC_DLL int pagekite_get_event_int(
  *    This function returns a pointer to the data associated with a
  *    given API event.
  *
+ *    See also: doc/Event_API.md
+ *
  * Returns: A pointer to a string.
  */
 DECLSPEC_DLL const char* pagekite_get_event_str(
@@ -633,6 +663,8 @@ DECLSPEC_DLL const char* pagekite_get_event_str(
 /* Lifecycle: Respond to a pagekite event.
  *
  *    Post a response to an API event. 
+ *
+ *    See also: doc/Event_API.md
  *
  * Returns: Always returns 0.
  */
@@ -646,6 +678,8 @@ DECLSPEC_DLL int pagekite_event_respond(
 /* Lifecycle: Respond to a pagekite event.
  *
  *    Post a response (with data) to an API event. 
+ *
+ *    See also: doc/Event_API.md
  *
  * Returns: Always returns 0.
  */

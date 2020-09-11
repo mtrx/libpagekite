@@ -1,7 +1,7 @@
 /******************************************************************************
 pkutils.h - Utility functions for pagekite.
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -32,6 +32,7 @@ extern char random_junk[];
 
 void better_srand(int);
 int32_t murmur3_32(const uint8_t* key, size_t len);
+int zero_first_eol(int, char*);
 int zero_first_crlf(int, char*);
 int zero_first_whitespace(int, char*);
 int zero_nth_char(int, char, int, char*);
@@ -42,6 +43,9 @@ int dbg_write(int, char *, int);
 int set_non_blocking(int);
 int set_blocking(int);
 void sleep_ms(int);
+time_t pk_time();
+void pk_gettime(struct timespec*);
+void pk_pthread_condattr_setclock(pthread_condattr_t*);
 int wait_fd(int, int);
 ssize_t timed_read(int, void*, size_t, int);
 struct addrinfo* copy_addrinfo_data(struct addrinfo* dst, struct addrinfo* src);

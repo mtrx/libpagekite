@@ -47,6 +47,10 @@
 #define MUTEX_UNLOCK(x)  pthread_mutex_unlock(&(x))
 #define THREAD_ID        pthread_self()
 
+#if OPENSSL_VERSION_NUMBER < 0x10000000L
+#define CRYPTO_THREADID_set_callback CRYPTO_set_id_callback
+#endif
+
 #else
 
 /* FIXME: Make this work on Windows */
@@ -72,10 +76,18 @@ static void pk_ssl_locking_function(int mode, int n, const char *file, int line)
     MUTEX_UNLOCK(pk_ssl_mutex_buf[n]);
 }
 
+#if OPENSSL_VERSION_NUMBER < 0x10000000L
 static unsigned long pk_ssl_id_function(void)
 {
   return ((unsigned long)THREAD_ID);
 }
+#else
+static void pk_ssl_id_function(CRYPTO_THREADID *id)
+{
+  CRYPTO_THREADID_set_numeric(id, (unsigned long)THREAD_ID);
+}
+#endif
+
 #endif
 
 int pk_ssl_thread_setup(void)
@@ -87,7 +99,7 @@ int pk_ssl_thread_setup(void)
     return 0;
   for(i = 0;  i < CRYPTO_num_locks();  i++)
     MUTEX_SETUP(pk_ssl_mutex_buf[i]);
-  CRYPTO_set_id_callback(pk_ssl_id_function);
+  CRYPTO_THREADID_set_callback(pk_ssl_id_function);
   CRYPTO_set_locking_callback(pk_ssl_locking_function);
 #endif
   return 1;
@@ -99,7 +111,7 @@ int pk_ssl_thread_cleanup(void)
   int i;
   if(!mutex_buf)
     return 0;
-  CRYPTO_set_id_callback(NULL);
+  CRYPTO_THREADID_set_callback(NULL);
   CRYPTO_set_locking_callback(NULL);
   for(i = 0;  i < CRYPTO_num_locks();  i++)
     MUTEX_CLEANUP(pk_ssl_mutex_buf[i]);

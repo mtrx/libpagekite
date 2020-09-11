@@ -1,7 +1,7 @@
 /******************************************************************************
 pkmanager.h - A manager for multiple pagekite connections.
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -47,6 +47,7 @@ struct pk_tunnel {
   int                     fe_port;
   time_t                  last_ddnsup;
   int                     priority;
+  char*                   fe_uuid;
   /* These apply to all tunnels (frontend or backend) */
   struct addrinfo         ai;
   struct pk_conn          conn;
@@ -92,6 +93,8 @@ struct pk_backend_conn {
                             + sizeof(struct pk_job) * (c+f))
 #define PK_MANAGER_MINSIZE PK_MANAGER_BUFSIZE(MIN_KITE_ALLOC, MIN_FE_ALLOC, \
                                               MIN_CONN_ALLOC, PARSER_BYTES_MIN)
+#define PK_TUNNEL_ITER(pkm, fe) for (struct pk_tunnel* fe = pkm->tunnels; fe < (pkm->tunnels + pkm->tunnel_max); fe++)
+#define PK_KITE_ITER(pkm, kite) for (struct pk_pagekite* kite = pkm->kites; kite < (pkm->kites + pkm->kite_max); kite++)
 
 struct pk_manager {
   pk_status_t              status;
@@ -132,10 +135,10 @@ struct pk_manager {
   int                      be_conn_max;
   unsigned int             was_malloced:1;
   unsigned int             ev_loop_malloced:1;
-  unsigned int             fancy_pagekite_net_rejection:1;
   unsigned int             enable_watchdog:1;
   unsigned int             enable_http_forwarding_headers:1;
   int                      want_spare_frontends;
+  char*                    fancy_pagekite_net_rejection_url;
   char*                    dynamic_dns_url;
   time_t                   interval_fudge_factor;
   time_t                   housekeeping_interval_min;

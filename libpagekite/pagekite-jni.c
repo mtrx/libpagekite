@@ -4,7 +4,7 @@
       * * *   WARNING: This file is auto-generated, do not edit!  * * *
 
 *******************************************************************************
-This file is Copyright 2012-2017, The Beanstalks Project ehf.
+This file is Copyright 2012-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -258,6 +258,21 @@ jint Java_net_pagekite_lib_PageKiteAPI_setHousekeepingMaxInterval(
 
   jint rv = pagekite_set_housekeeping_max_interval(pagekite_manager_global, interval);
 
+  return rv;
+}
+
+jint Java_net_pagekite_lib_PageKiteAPI_setRejectionUrl(
+  JNIEnv* env, jclass unused_class
+, jstring jurl
+){
+  if (pagekite_manager_global == NULL) return -1;
+
+  const jbyte* url = NULL;
+  if (jurl != NULL) url = (*env)->GetStringUTFChars(env, jurl, NULL);
+
+  jint rv = pagekite_set_rejection_url(pagekite_manager_global, url);
+
+  if (jurl != NULL) (*env)->ReleaseStringUTFChars(env, jurl, url);
   return rv;
 }
 

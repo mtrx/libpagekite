@@ -1,7 +1,7 @@
 /******************************************************************************
 pkstate.h - Global program state
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -53,6 +53,9 @@ struct pk_global_state {
 #ifdef HAVE_IPV6
   unsigned int    use_ipv6:1;
 #endif
+  unsigned int    ddns_request_public_ipv4:1;
+  unsigned int    ddns_request_public_ipv6:1;
+  char*           dns_check_name;
 
   /* Global program state */
   unsigned int    live_streams;

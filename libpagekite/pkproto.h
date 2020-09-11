@@ -1,7 +1,7 @@
 /******************************************************************************
 pkproto.h - A basic serializer/deserializer for the PageKite tunnel protocol.
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -29,6 +29,7 @@ Note: For alternate license terms, see the file COPYING.md.
 
 #define PK_FRONTEND_PING "GET /ping HTTP/1.1\r\nHost: ping.pagekite\r\n\r\n"
 #define PK_FRONTEND_PONG "HTTP/1.1 503 Unavailable"
+#define PK_FRONTEND_UUID "X-PageKite-UUID:"
 #define PK_FRONTEND_OVERLOADED "X-PageKite-Overloaded:"
 
 #define PK_HANDSHAKE_CONNECT "CONNECT PageKite:1 HTTP/1.0\r\n"
@@ -45,21 +46,27 @@ Note: For alternate license terms, see the file COPYING.md.
 
 /* Must be careful here, outsiders can manipulate the contents of the
  * reply message.  Beware the buffer overflows! */
+#define PK_REJECT_BACKEND -1
 #define PK_REJECT_MAXSIZE 1024
-#define PK_REJECT_FMT ("HTTP/1.1 503 Unavailable\r\n" \
-                       "Content-Type: text/html; charset=utf-8\r\n" \
-                       "Pragma: no-cache\r\n" \
-                       "Expires: 0\r\n" \
-                       "Cache-Control: no-store\r\n" \
-                       "Connection: close\r\n" \
-                       "\r\n" \
-                       "<html>%s<h1>Sorry! (%.3s/%s)</h1>" \
-                       "<p>The %.8s <a href='http://pagekite.org/'>" \
-                       "<i>PageKite</i></a> for <b>%.64s</b> is unavailable " \
-                       "at the moment.</p><p>Please try again later.</p>" \
-                       "%s</html>")
-#define PK_REJECT_PRE_PAGEKITE ("<frameset cols='*'><frame target='_top' src='https://pagekite.net/offline/?&where=%.3s&v=%s&proto=%.8s&domain=%.64s'><noframes>")
-#define PK_REJECT_POST_PAGEKITE "</noframes></frameset>"
+#define PK_REJECT_FMT (\
+  "HTTP/1.1 503 Unavailable\r\n" \
+  "Content-Type: text/html; charset=utf-8\r\n" \
+  "Pragma: no-cache\r\n" \
+  "Expires: 0\r\n" \
+  "Cache-Control: no-store\r\n" \
+  "Connection: close\r\n" \
+  "\r\n" \
+  "<html>%.450s<h1>Sorry! (%.2s/%.16s)</h1><p>The %.8s" \
+  " <a href='http://pagekite.org/'><i>PageKite</i></a> for <b>%.128s</b>" \
+  " is unavailable at the moment.</p><p>Please try again later.</p>" \
+  "%.64s</html>")
+#define PK_REJECT_FANCY_URL "https://pagekite.net/offline/"
+#define PK_REJECT_FANCY_PRE (\
+  "<frameset cols='*'><frame target='_top' " \
+  "src='%.128s?&where=%.2s&v=%.16s&proto=%.8s&domain=%.64s&relay_ip=%.40s'>" \
+  "<noframes>")
+#define PK_REJECT_FANCY_POST (\
+  "</noframes></frameset>")
 
 #define PK_REJECT_TLS_DATA "\x15\x03\0\0\x02\x02\x31"
 #define PK_REJECT_TLS_LEN  7
@@ -84,8 +91,12 @@ struct  pk_pagekite {
 
 /* Data structure describing a kite request */
 #define PK_KITE_UNKNOWN   0x0000
-#define PK_KITE_FLYING    0x0001
-#define PK_KITE_REJECTED  0x0002
+#define PK_KITE_OK        0x0001
+#define PK_KITE_FLYING    0x0001  /* Same as OK */
+#define PK_KITE_WANTSIG   0x0002
+#define PK_KITE_REJECTED  0x0003
+#define PK_KITE_DUPLICATE 0x0004
+#define PK_KITE_INVALID   0x0005
 #define PK_SALT_LENGTH    36
 struct pk_kite_request {
   PK_MEMORY_CANARY
@@ -153,21 +164,28 @@ struct pk_parser* pk_parser_init (int, char*,
                                   pkChunkCallback*, void *);
 int               pk_parser_parse(struct pk_parser*, int, char*);
 void              pk_parser_reset(struct pk_parser*);
+void              pk_chunk_reset(struct pk_chunk*);
+void              pk_chunk_reset_values(struct pk_chunk*);
 
 void              pk_reset_pagekite(struct pk_pagekite* kite);
 
 size_t            pk_format_frame(char*, const char*, const char *, size_t);
 size_t            pk_reply_overhead(const char *sid, size_t);
 size_t            pk_format_reply(char*, const char*, size_t, const char*);
+ssize_t           pk_format_chunk(char*, size_t, struct pk_chunk*);
 size_t            pk_format_skb(char*, const char*, int);
 size_t            pk_format_eof(char*, const char*, int);
 size_t            pk_format_pong(char*);
 size_t            pk_format_ping(char*);
+size_t            pk_format_http_rejection(char*, int, const char*,
+                                           const char*, const char*);
 
-int               pk_make_bsalt(struct pk_kite_request*);
-char*             pk_sign(const char*, const char*, const char*, int, char *);
+int               pk_make_salt(char*);
+char*             pk_sign(const char*, const char*, time_t, const char*, int, char *);
+char*             pk_prepare_kite_challenge(char *, struct pk_kite_request*, char*, time_t);
 int               pk_sign_kite_request(char *, struct pk_kite_request*, int);
-char*             pk_parse_kite_request(struct pk_kite_request*, const char*);
+char*             pk_parse_kite_request(struct pk_kite_request*, char**, const char*);
+struct pk_kite_request* pk_parse_pagekite_response(char*, size_t, char*, char*);
 int               pk_connect_ai(struct pk_conn*, struct addrinfo*, int,
                                 unsigned int, struct pk_kite_request*, char*,
                                 SSL_CTX*, const char*);

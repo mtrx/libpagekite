@@ -1,7 +1,7 @@
 /******************************************************************************
 pkerror.c - Basic error handling utilites
 
-This file is Copyright 2011-2017, The Beanstalks Project ehf.
+This file is Copyright 2011-2020, The Beanstalks Project ehf.
 
 This program is free software: you can redistribute it and/or modify it under
 the terms  of the  Apache  License 2.0  as published by the  Apache  Software
@@ -100,6 +100,9 @@ void pk_perror(const char* prefix) {
     case ERR_TOOBIG_PARSERS:
       pk_log(PK_LOG_ERROR, "%s: Insufficient allocated memory (%d)",
                            prefix, pk_error);
+      break;
+    case ERR_NO_IPVX:
+      pk_log(PK_LOG_ERROR, "%s: Both IPv6 and IPv4 are disabled!", prefix);
       break;
     default:
       pk_log(PK_LOG_ERROR, "%s: pk_error = %d", prefix, pk_error);
